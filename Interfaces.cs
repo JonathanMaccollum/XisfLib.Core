@@ -342,6 +342,11 @@ namespace XisfLib.Core
         IStreamResolver CreateStreamResolver(
             Func<string, Stream>? fileStreamProvider = null,
             Func<Uri, Stream>? uriStreamProvider = null);
+
+        /// <summary>
+        /// Creates a validator instance.
+        /// </summary>
+        IXisfValidator CreateValidator();
     }
 
     /// <summary>

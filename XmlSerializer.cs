@@ -322,6 +322,18 @@ namespace XisfLib.Core.Implementations
                     var comment = element.Attribute("comment")?.Value ?? "";
                     return new XisfFitsKeyword(name, value, comment, uid);
 
+                case "ColorFilterArray":
+                    var pattern = element.Attribute("pattern")?.Value ??
+                                 throw new FormatException("ColorFilterArray element must have pattern attribute");
+                    var widthStr = element.Attribute("width")?.Value ??
+                                  throw new FormatException("ColorFilterArray element must have width attribute");
+                    var heightStr = element.Attribute("height")?.Value ??
+                                   throw new FormatException("ColorFilterArray element must have height attribute");
+                    var cfaWidth = uint.Parse(widthStr, CultureInfo.InvariantCulture);
+                    var cfaHeight = uint.Parse(heightStr, CultureInfo.InvariantCulture);
+                    var cfaName = element.Attribute("name")?.Value;
+                    return new XisfColorFilterArray(pattern, cfaWidth, cfaHeight, cfaName, uid);
+
                 default:
                     // For unsupported core elements, return a Reference with empty id
                     return new XisfReference("");
@@ -366,7 +378,7 @@ namespace XisfLib.Core.Implementations
 
         #endregion
 
-        #region Serialization (Stubs for now)
+        #region Serialization
 
         public XDocument SerializeHeader(XisfHeader header, XisfWriterOptions options)
         {
@@ -384,22 +396,221 @@ namespace XisfLib.Core.Implementations
                 doc.Root!.AddBeforeSelf(new XComment(header.InitialComment));
             }
 
+            // Add Metadata element
+            var metadataElement = SerializeMetadata(header.Metadata, options);
+            root.Add(metadataElement);
+
+            // Add core elements
+            foreach (var kvp in header.CoreElements)
+            {
+                var coreElement = SerializeCoreElement(kvp.Value, options);
+                root.Add(coreElement);
+            }
+
             return doc;
+        }
+
+        private XElement SerializeMetadata(XisfMetadata metadata, XisfWriterOptions options)
+        {
+            var element = new XElement("Metadata");
+
+            // Required properties
+            element.Add(new XElement("Property",
+                new XAttribute("id", "XISF:CreationTime"),
+                new XAttribute("type", "TimePoint"),
+                new XAttribute("value", metadata.CreationTime.ToString("yyyy-MM-ddTHH:mm:ss.fffzzz", CultureInfo.InvariantCulture))));
+
+            element.Add(new XElement("Property",
+                new XAttribute("id", "XISF:CreatorApplication"),
+                new XAttribute("type", "String"),
+                new XAttribute("value", metadata.CreatorApplication)));
+
+            // Optional properties
+            if (!string.IsNullOrEmpty(metadata.CreatorModule))
+            {
+                element.Add(new XElement("Property",
+                    new XAttribute("id", "XISF:CreatorModule"),
+                    new XAttribute("type", "String"),
+                    new XAttribute("value", metadata.CreatorModule)));
+            }
+
+            if (!string.IsNullOrEmpty(metadata.CreatorOS))
+            {
+                element.Add(new XElement("Property",
+                    new XAttribute("id", "XISF:CreatorOS"),
+                    new XAttribute("type", "String"),
+                    new XAttribute("value", metadata.CreatorOS)));
+            }
+
+            return element;
         }
 
         public XElement SerializeProperty(XisfProperty property, XisfWriterOptions options)
         {
-            throw new NotImplementedException("Property serialization not yet implemented");
+            var element = new XElement("Property",
+                new XAttribute("id", property.Id));
+
+            if (!string.IsNullOrEmpty(property.Comment))
+            {
+                element.Add(new XAttribute("comment", property.Comment));
+            }
+
+            switch (property)
+            {
+                case XisfScalarProperty<bool> boolProp:
+                    element.Add(new XAttribute("type", "Boolean"));
+                    element.Add(new XAttribute("value", boolProp.Value.ToString().ToLowerInvariant()));
+                    break;
+
+                case XisfScalarProperty<int> intProp:
+                    element.Add(new XAttribute("type", "Int32"));
+                    element.Add(new XAttribute("value", intProp.Value.ToString(CultureInfo.InvariantCulture)));
+                    break;
+
+                case XisfScalarProperty<uint> uintProp:
+                    element.Add(new XAttribute("type", "UInt32"));
+                    element.Add(new XAttribute("value", uintProp.Value.ToString(CultureInfo.InvariantCulture)));
+                    break;
+
+                case XisfScalarProperty<float> floatProp:
+                    element.Add(new XAttribute("type", "Float32"));
+                    element.Add(new XAttribute("value", floatProp.Value.ToString("G9", CultureInfo.InvariantCulture)));
+                    break;
+
+                case XisfScalarProperty<double> doubleProp:
+                    element.Add(new XAttribute("type", "Float64"));
+                    element.Add(new XAttribute("value", doubleProp.Value.ToString("G17", CultureInfo.InvariantCulture)));
+                    break;
+
+                case XisfStringProperty stringProp:
+                    element.Add(new XAttribute("type", "String"));
+                    element.Add(new XAttribute("value", stringProp.Value));
+                    break;
+
+                case XisfTimePointProperty timeProp:
+                    element.Add(new XAttribute("type", "TimePoint"));
+                    element.Add(new XAttribute("value", timeProp.Value.ToString("yyyy-MM-ddTHH:mm:ss.fffzzz", CultureInfo.InvariantCulture)));
+                    break;
+
+                default:
+                    throw new NotSupportedException($"Property type {property.GetType().Name} is not yet supported for serialization");
+            }
+
+            return element;
         }
 
         public XElement SerializeImage(XisfImage image, XisfWriterOptions options)
         {
-            throw new NotImplementedException("Image serialization not yet implemented");
+            var element = new XElement("Image");
+
+            // Required attributes
+            var geometryStr = FormatGeometry(image.Geometry);
+            element.Add(new XAttribute("geometry", geometryStr));
+            element.Add(new XAttribute("sampleFormat", image.SampleFormat.ToString()));
+            element.Add(new XAttribute("colorSpace", image.ColorSpace.ToString()));
+
+            // Data block location
+            var location = SerializeDataBlockLocation(image.PixelData);
+            element.Add(new XAttribute("location", location));
+
+            // Compression
+            if (image.PixelData.Compression != null)
+            {
+                var compressionStr = FormatCompression(image.PixelData.Compression);
+                element.Add(new XAttribute("compression", compressionStr));
+            }
+
+            // Checksum
+            if (image.PixelData.Checksum != null)
+            {
+                var checksumStr = FormatChecksum(image.PixelData.Checksum);
+                element.Add(new XAttribute("checksum", checksumStr));
+            }
+
+            // Optional attributes
+            if (image.Bounds != null)
+            {
+                element.Add(new XAttribute("bounds",
+                    $"{image.Bounds.Lower.ToString("G17", CultureInfo.InvariantCulture)}:{image.Bounds.Upper.ToString("G17", CultureInfo.InvariantCulture)}"));
+            }
+
+            if (image.PixelStorage != XisfPixelStorage.Planar)
+            {
+                element.Add(new XAttribute("pixelStorage", image.PixelStorage.ToString()));
+            }
+
+            if (image.ImageType.HasValue)
+            {
+                element.Add(new XAttribute("imageType", image.ImageType.Value.ToString()));
+            }
+
+            if (image.Offset.HasValue)
+            {
+                element.Add(new XAttribute("offset", image.Offset.Value.ToString("G17", CultureInfo.InvariantCulture)));
+            }
+
+            if (!string.IsNullOrEmpty(image.ImageId))
+            {
+                element.Add(new XAttribute("id", image.ImageId));
+            }
+
+            if (image.Uuid.HasValue)
+            {
+                element.Add(new XAttribute("uuid", image.Uuid.Value.ToString("D")));
+            }
+
+            // Child properties
+            if (image.Properties != null)
+            {
+                foreach (var property in image.Properties)
+                {
+                    element.Add(SerializeProperty(property, options));
+                }
+            }
+
+            // Associated elements
+            if (image.AssociatedElements != null)
+            {
+                foreach (var associatedElement in image.AssociatedElements)
+                {
+                    // Skip invalid Reference elements (e.g., from unsupported deserialized elements)
+                    if (associatedElement is XisfReference reference && string.IsNullOrEmpty(reference.RefId))
+                        continue;
+
+                    element.Add(SerializeCoreElement(associatedElement, options));
+                }
+            }
+
+            return element;
         }
 
         public XElement SerializeCoreElement(XisfCoreElement element, XisfWriterOptions options)
         {
-            throw new NotImplementedException("Core element serialization not yet implemented");
+            return element switch
+            {
+                XisfReference reference => new XElement("Reference", new XAttribute("ref", reference.RefId)),
+
+                XisfResolution resolution => new XElement("Resolution",
+                    new XAttribute("horizontal", resolution.Horizontal.ToString("G17", CultureInfo.InvariantCulture)),
+                    new XAttribute("vertical", resolution.Vertical.ToString("G17", CultureInfo.InvariantCulture)),
+                    new XAttribute("unit", resolution.Unit.ToString()),
+                    !string.IsNullOrEmpty(resolution.Uid) ? new XAttribute("uid", resolution.Uid) : null),
+
+                XisfFitsKeyword fits => new XElement("FITSKeyword",
+                    new XAttribute("name", fits.Name),
+                    new XAttribute("value", fits.Value),
+                    new XAttribute("comment", fits.Comment),
+                    !string.IsNullOrEmpty(fits.Uid) ? new XAttribute("uid", fits.Uid) : null),
+
+                XisfColorFilterArray cfa => new XElement("ColorFilterArray",
+                    new XAttribute("pattern", cfa.Pattern),
+                    new XAttribute("width", cfa.Width.ToString(CultureInfo.InvariantCulture)),
+                    new XAttribute("height", cfa.Height.ToString(CultureInfo.InvariantCulture)),
+                    !string.IsNullOrEmpty(cfa.Name) ? new XAttribute("name", cfa.Name) : null,
+                    !string.IsNullOrEmpty(cfa.Uid) ? new XAttribute("uid", cfa.Uid) : null),
+
+                _ => throw new NotSupportedException($"Core element type {element.GetType().Name} is not yet supported for serialization")
+            };
         }
 
         public string SerializeDataBlockLocation(XisfDataBlock block)
@@ -412,6 +623,50 @@ namespace XisfLib.Core.Implementations
                 ExternalDataBlock external => $"url({external.Location})",
                 _ => throw new ArgumentException($"Unknown data block type: {block.GetType().Name}")
             };
+        }
+
+        private string FormatGeometry(XisfImageGeometry geometry)
+        {
+            var dims = string.Join(":", geometry.Dimensions);
+            return $"{dims}:{geometry.ChannelCount}";
+        }
+
+        private string FormatCompression(XisfCompression compression)
+        {
+            var codecStr = compression.Codec switch
+            {
+                XisfCompressionCodec.Zlib => "zlib",
+                XisfCompressionCodec.ZlibSh => "zlib+sh",
+                XisfCompressionCodec.LZ4 => "lz4",
+                XisfCompressionCodec.LZ4Sh => "lz4+sh",
+                XisfCompressionCodec.LZ4HC => "lz4hc",
+                XisfCompressionCodec.LZ4HCSh => "lz4hc+sh",
+                _ => throw new NotSupportedException($"Unsupported compression codec: {compression.Codec}")
+            };
+
+            var result = $"{codecStr}:{compression.UncompressedSize}";
+            if (compression.ItemSize.HasValue)
+            {
+                result += $":{compression.ItemSize.Value}";
+            }
+
+            return result;
+        }
+
+        private string FormatChecksum(XisfChecksum checksum)
+        {
+            var algorithmStr = checksum.Algorithm switch
+            {
+                XisfHashAlgorithm.SHA1 => "sha1",
+                XisfHashAlgorithm.SHA256 => "sha256",
+                XisfHashAlgorithm.SHA512 => "sha512",
+                XisfHashAlgorithm.SHA3_256 => "sha3-256",
+                XisfHashAlgorithm.SHA3_512 => "sha3-512",
+                _ => throw new NotSupportedException($"Unsupported hash algorithm: {checksum.Algorithm}")
+            };
+
+            var digestHex = Convert.ToHexString(checksum.Digest.ToArray()).ToLowerInvariant();
+            return $"{algorithmStr}:{digestHex}";
         }
 
         #endregion
