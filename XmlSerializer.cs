@@ -134,11 +134,11 @@ namespace XisfLib.Core.Implementations
 
             var sampleFormatStr = element.Attribute("sampleFormat")?.Value ??
                                  throw new FormatException("Image element must have sampleFormat attribute");
-            var sampleFormat = Enum.Parse<XisfSampleFormat>(sampleFormatStr);
+            var sampleFormat = Enum.Parse<XisfSampleFormat>(sampleFormatStr, ignoreCase: true);
 
             var colorSpaceStr = element.Attribute("colorSpace")?.Value ??
                                throw new FormatException("Image element must have colorSpace attribute");
-            var colorSpace = Enum.Parse<XisfColorSpace>(colorSpaceStr);
+            var colorSpace = Enum.Parse<XisfColorSpace>(colorSpaceStr, ignoreCase: true);
 
             // Parse data block location
             var locationStr = element.Attribute("location")?.Value;
@@ -313,7 +313,7 @@ namespace XisfLib.Core.Implementations
                     var h = double.Parse(element.Attribute("horizontal")?.Value ?? "72", CultureInfo.InvariantCulture);
                     var v = double.Parse(element.Attribute("vertical")?.Value ?? "72", CultureInfo.InvariantCulture);
                     var unitStr = element.Attribute("unit")?.Value;
-                    var unit = string.IsNullOrEmpty(unitStr) ? XisfResolutionUnit.Inch : Enum.Parse<XisfResolutionUnit>(unitStr);
+                    var unit = string.IsNullOrEmpty(unitStr) ? XisfResolutionUnit.Inch : Enum.Parse<XisfResolutionUnit>(unitStr, ignoreCase: true);
                     return new XisfResolution(h, v, unit, uid);
 
                 case "FITSKeyword":

@@ -143,6 +143,71 @@ namespace XisfLib.Core
             }
         }
 
+        /// <summary>
+        /// Reads XISF metadata without loading pixel data for performance.
+        /// </summary>
+        /// <param name="filePath">Path to the XISF file.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>The XISF metadata unit.</returns>
+        public async Task<XisfMetadataUnit> ReadMetadataFromFileAsync(string filePath, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+                throw new ArgumentException("File path cannot be null or empty", nameof(filePath));
+
+            if (!File.Exists(filePath))
+                throw new FileNotFoundException($"XISF file not found: {filePath}", filePath);
+
+            using var stream = File.OpenRead(filePath);
+            return await ReadMetadataFromStreamAsync(stream, filePath, cancellationToken);
+        }
+
+        /// <summary>
+        /// Reads XISF metadata from a stream without loading pixel data for performance.
+        /// </summary>
+        /// <param name="stream">Stream containing XISF data.</param>
+        /// <param name="hint">Optional hint about the file type.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>The XISF metadata unit.</returns>
+        public async Task<XisfMetadataUnit> ReadMetadataFromStreamAsync(Stream stream, string? hint = null, CancellationToken cancellationToken = default)
+        {
+            if (stream == null)
+                throw new ArgumentNullException(nameof(stream));
+
+            if (!stream.CanRead)
+                throw new ArgumentException("Stream must be readable", nameof(stream));
+
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            // Determine strategy based on hint or detect from stream
+            IStorageStrategy strategy;
+            if (!string.IsNullOrEmpty(hint))
+            {
+                strategy = _strategyFactory.CreateStrategy(hint);
+            }
+            else
+            {
+                strategy = await DetectStrategyAsync(stream, cancellationToken);
+            }
+
+            return await strategy.ReadMetadataAsync(stream, Options, cancellationToken);
+        }
+
+        /// <summary>
+        /// Synchronous version of ReadMetadataFromFileAsync.
+        /// </summary>
+        public XisfMetadataUnit ReadMetadataFromFile(string filePath)
+        {
+            return ReadMetadataFromFileAsync(filePath).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Synchronous version of ReadMetadataFromStreamAsync.
+        /// </summary>
+        public XisfMetadataUnit ReadMetadataFromStream(Stream stream, string? hint = null)
+        {
+            return ReadMetadataFromStreamAsync(stream, hint).GetAwaiter().GetResult();
+        }
+
         private async Task<IStorageStrategy> DetectStrategyAsync(Stream stream, CancellationToken cancellationToken)
         {
             if (!stream.CanSeek)

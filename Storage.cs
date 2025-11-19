@@ -15,6 +15,7 @@ namespace XisfLib.Core.Implementations
     internal interface IStorageStrategy
     {
         Task<XisfUnit> ReadAsync(Stream stream, XisfReaderOptions options, CancellationToken cancellationToken = default);
+        Task<XisfMetadataUnit> ReadMetadataAsync(Stream stream, XisfReaderOptions options, CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -94,6 +95,100 @@ namespace XisfLib.Core.Implementations
                 new MonolithicStorage(),
                 header,
                 images,
+                globalProperties
+            );
+        }
+
+        public async Task<XisfMetadataUnit> ReadMetadataAsync(Stream stream, XisfReaderOptions options, CancellationToken cancellationToken = default)
+        {
+            // Read and validate file header (16 bytes)
+            var headerBytes = new byte[16];
+            await stream.ReadAsync(headerBytes.AsMemory(0, 16), cancellationToken);
+
+            var fileHeader = ParseFileHeader(headerBytes);
+            if (!fileHeader.IsValid)
+                throw new FormatException("Invalid XISF file header signature");
+
+            // Read XML header
+            var xmlHeaderBytes = new byte[fileHeader.HeaderLength];
+            await stream.ReadAsync(xmlHeaderBytes.AsMemory(0, (int)fileHeader.HeaderLength), cancellationToken);
+
+            var xmlHeaderText = Encoding.UTF8.GetString(xmlHeaderBytes);
+            var xmlDocument = XDocument.Parse(xmlHeaderText);
+
+            // Deserialize header
+            var header = _xmlSerializer.DeserializeHeader(xmlDocument);
+
+            // Parse image metadata from XML (without loading pixel data)
+            var root = xmlDocument.Root!;
+            var imageElements = root.Elements().Where(e => e.Name.LocalName == "Image").ToList();
+            var imageMetadataList = new List<XisfImageMetadata>();
+
+            foreach (var imageElement in imageElements)
+            {
+                var image = _xmlSerializer.DeserializeImage(imageElement);
+
+                // Extract data block info without loading pixel data
+                XisfDataBlockInfo dataBlockInfo;
+                if (image.PixelData is AttachedDataBlock attachedBlock)
+                {
+                    dataBlockInfo = new XisfDataBlockInfo(
+                        attachedBlock.Position,
+                        attachedBlock.Size,
+                        attachedBlock.ByteOrder,
+                        attachedBlock.Checksum,
+                        attachedBlock.Compression
+                    );
+                }
+                else if (image.PixelData is InlineDataBlock inlineBlock)
+                {
+                    dataBlockInfo = new XisfDataBlockInfo(
+                        0, // Inline blocks don't have file positions
+                        (ulong)inlineBlock.Data.Length,
+                        inlineBlock.ByteOrder,
+                        inlineBlock.Checksum,
+                        inlineBlock.Compression
+                    );
+                }
+                else
+                {
+                    dataBlockInfo = new XisfDataBlockInfo(0, 0);
+                }
+
+                // Create image metadata without pixel data
+                var imageMetadata = new XisfImageMetadata(
+                    image.Geometry,
+                    image.SampleFormat,
+                    image.ColorSpace,
+                    dataBlockInfo,
+                    image.Bounds,
+                    image.PixelStorage,
+                    image.ImageType,
+                    image.Offset,
+                    image.Orientation,
+                    image.ImageId,
+                    image.Uuid,
+                    image.Properties,
+                    image.AssociatedElements
+                );
+
+                imageMetadataList.Add(imageMetadata);
+            }
+
+            // Parse global properties
+            var propertyElements = root.Elements().Where(e => e.Name.LocalName == "Property" &&
+                                                             e.Parent?.Name.LocalName == "xisf").ToList();
+            var globalProperties = new List<XisfProperty>();
+
+            foreach (var propElement in propertyElements)
+            {
+                globalProperties.Add(_xmlSerializer.DeserializeProperty(propElement));
+            }
+
+            return new XisfMetadataUnit(
+                new MonolithicStorage(),
+                header,
+                imageMetadataList,
                 globalProperties
             );
         }
@@ -188,6 +283,92 @@ namespace XisfLib.Core.Implementations
                 new DistributedStorage("header.xish", dataBlockFiles),
                 header,
                 images,
+                globalProperties
+            );
+        }
+
+        public async Task<XisfMetadataUnit> ReadMetadataAsync(Stream stream, XisfReaderOptions options, CancellationToken cancellationToken = default)
+        {
+            // For distributed XISF, the stream contains only the XML header (no binary header)
+            var xmlHeaderText = await new StreamReader(stream, Encoding.UTF8).ReadToEndAsync();
+            var xmlDocument = XDocument.Parse(xmlHeaderText);
+
+            // Deserialize header
+            var header = _xmlSerializer.DeserializeHeader(xmlDocument);
+
+            // Parse image metadata from XML (without loading pixel data)
+            var root = xmlDocument.Root!;
+            var imageElements = root.Elements().Where(e => e.Name.LocalName == "Image").ToList();
+            var imageMetadataList = new List<XisfImageMetadata>();
+
+            foreach (var imageElement in imageElements)
+            {
+                var image = _xmlSerializer.DeserializeImage(imageElement);
+
+                // Extract data block info without loading pixel data
+                XisfDataBlockInfo dataBlockInfo;
+                if (image.PixelData is ExternalDataBlock externalBlock)
+                {
+                    dataBlockInfo = new XisfDataBlockInfo(
+                        externalBlock.Position ?? 0,
+                        externalBlock.Size ?? 0,
+                        externalBlock.ByteOrder,
+                        externalBlock.Checksum,
+                        externalBlock.Compression
+                    );
+                }
+                else if (image.PixelData is InlineDataBlock inlineBlock)
+                {
+                    dataBlockInfo = new XisfDataBlockInfo(
+                        0,
+                        (ulong)inlineBlock.Data.Length,
+                        inlineBlock.ByteOrder,
+                        inlineBlock.Checksum,
+                        inlineBlock.Compression
+                    );
+                }
+                else
+                {
+                    dataBlockInfo = new XisfDataBlockInfo(0, 0);
+                }
+
+                // Create image metadata without pixel data
+                var imageMetadata = new XisfImageMetadata(
+                    image.Geometry,
+                    image.SampleFormat,
+                    image.ColorSpace,
+                    dataBlockInfo,
+                    image.Bounds,
+                    image.PixelStorage,
+                    image.ImageType,
+                    image.Offset,
+                    image.Orientation,
+                    image.ImageId,
+                    image.Uuid,
+                    image.Properties,
+                    image.AssociatedElements
+                );
+
+                imageMetadataList.Add(imageMetadata);
+            }
+
+            // Parse global properties
+            var propertyElements = root.Elements().Where(e => e.Name.LocalName == "Property" &&
+                                                             e.Parent?.Name.LocalName == "xisf").ToList();
+            var globalProperties = new List<XisfProperty>();
+
+            foreach (var propElement in propertyElements)
+            {
+                globalProperties.Add(_xmlSerializer.DeserializeProperty(propElement));
+            }
+
+            // Determine the data block files (would need to be provided or discovered)
+            var dataBlockFiles = new List<string>();
+
+            return new XisfMetadataUnit(
+                new DistributedStorage("header.xish", dataBlockFiles),
+                header,
+                imageMetadataList,
                 globalProperties
             );
         }

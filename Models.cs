@@ -391,6 +391,38 @@ public sealed record XisfUnit(
     XisfSignature? Signature = null
 );
 
+public sealed record XisfMetadataUnit(
+    XisfStorageModel StorageModel,
+    XisfHeader Header,
+    IReadOnlyList<XisfImageMetadata> Images,
+    IReadOnlyList<XisfProperty> GlobalProperties,
+    XisfSignature? Signature = null
+);
+
+public sealed record XisfImageMetadata(
+    XisfImageGeometry Geometry,
+    XisfSampleFormat SampleFormat,
+    XisfColorSpace ColorSpace,
+    XisfDataBlockInfo DataBlockInfo,
+    XisfImageBounds? Bounds = null,
+    XisfPixelStorage PixelStorage = XisfPixelStorage.Planar,
+    XisfImageType? ImageType = null,
+    double? Offset = null,
+    XisfImageOrientation? Orientation = null,
+    string? ImageId = null,
+    Guid? Uuid = null,
+    IReadOnlyList<XisfProperty>? Properties = null,
+    IReadOnlyList<XisfCoreElement>? AssociatedElements = null
+);
+
+public sealed record XisfDataBlockInfo(
+    ulong Position,
+    ulong Size,
+    XisfByteOrder ByteOrder = XisfByteOrder.LittleEndian,
+    XisfChecksum? Checksum = null,
+    XisfCompression? Compression = null
+);
+
 // ==================== Configuration ====================
 
 public sealed record XisfReaderOptions(
