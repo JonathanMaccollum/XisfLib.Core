@@ -43,7 +43,7 @@ public enum XisfNumericBase { Binary, Octal, Decimal, Hexadecimal }
 public enum XisfEncoding { Base64, Hex }
 public enum XisfByteOrder { LittleEndian, BigEndian }
 public enum XisfHashAlgorithm { SHA1, SHA256, SHA512, SHA3_256, SHA3_512 }
-public enum XisfCompressionCodec { Zlib, ZlibSh, LZ4, LZ4Sh, LZ4HC, LZ4HCSh }
+public enum XisfCompressionCodec { Zlib, ZlibSh, LZ4, LZ4Sh, LZ4HC, LZ4HCSh, Zstd, ZstdSh }
 public enum XisfResolutionUnit { Inch, Centimeter }
 
 // ==================== Simple Value Types ====================
