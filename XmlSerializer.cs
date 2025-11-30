@@ -641,6 +641,8 @@ namespace XisfLib.Core.Implementations
                 XisfCompressionCodec.LZ4Sh => "lz4+sh",
                 XisfCompressionCodec.LZ4HC => "lz4hc",
                 XisfCompressionCodec.LZ4HCSh => "lz4hc+sh",
+                XisfCompressionCodec.Zstd => "zstd",
+                XisfCompressionCodec.ZstdSh => "zstd+sh",
                 _ => throw new NotSupportedException($"Unsupported compression codec: {compression.Codec}")
             };
 
@@ -709,6 +711,8 @@ namespace XisfLib.Core.Implementations
                 "lz4+sh" => XisfCompressionCodec.LZ4Sh,
                 "lz4hc" => XisfCompressionCodec.LZ4HC,
                 "lz4hc+sh" => XisfCompressionCodec.LZ4HCSh,
+                "zstd" => XisfCompressionCodec.Zstd,
+                "zstd+sh" => XisfCompressionCodec.ZstdSh,
                 _ => throw new FormatException($"Unsupported compression codec: {codecStr}")
             };
 

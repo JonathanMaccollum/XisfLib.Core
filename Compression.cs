@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using ZstdSharp;
 
 namespace XisfLib.Core.Implementations
 {
@@ -20,6 +21,8 @@ namespace XisfLib.Core.Implementations
             XisfCompressionCodec.LZ4Sh,
             XisfCompressionCodec.LZ4HC,
             XisfCompressionCodec.LZ4HCSh,
+            XisfCompressionCodec.Zstd,
+            XisfCompressionCodec.ZstdSh,
         };
 
         public bool SupportsCodec(XisfCompressionCodec codec)
@@ -53,6 +56,7 @@ namespace XisfLib.Core.Implementations
                 XisfCompressionCodec.Zlib or XisfCompressionCodec.ZlibSh => CompressZlib(dataToCompress),
                 XisfCompressionCodec.LZ4 or XisfCompressionCodec.LZ4Sh => CompressLZ4(dataToCompress),
                 XisfCompressionCodec.LZ4HC or XisfCompressionCodec.LZ4HCSh => CompressLZ4HC(dataToCompress),
+                XisfCompressionCodec.Zstd or XisfCompressionCodec.ZstdSh => CompressZStd(dataToCompress),
                 _ => throw new NotSupportedException($"Unsupported codec: {compression.Codec}")
             };
         }
@@ -76,6 +80,7 @@ namespace XisfLib.Core.Implementations
                 XisfCompressionCodec.Zlib or XisfCompressionCodec.ZlibSh => DecompressZlib(compressed, compression.UncompressedSize),
                 XisfCompressionCodec.LZ4 or XisfCompressionCodec.LZ4Sh => DecompressLZ4(compressed, compression.UncompressedSize),
                 XisfCompressionCodec.LZ4HC or XisfCompressionCodec.LZ4HCSh => DecompressLZ4(compressed, compression.UncompressedSize),
+                XisfCompressionCodec.Zstd or XisfCompressionCodec.ZstdSh => DecompressZStd(compressed, compression.UncompressedSize),
                 _ => throw new NotSupportedException($"Unsupported codec: {compression.Codec}")
             };
 
@@ -86,7 +91,8 @@ namespace XisfLib.Core.Implementations
         {
             return codec == XisfCompressionCodec.ZlibSh ||
                    codec == XisfCompressionCodec.LZ4Sh ||
-                   codec == XisfCompressionCodec.LZ4HCSh;
+                   codec == XisfCompressionCodec.LZ4HCSh ||
+                   codec == XisfCompressionCodec.ZstdSh;
         }
 
         private ReadOnlyMemory<byte> CompressZlib(ReadOnlyMemory<byte> data)
@@ -164,6 +170,28 @@ namespace XisfLib.Core.Implementations
             return target;
         }
 
+        private ReadOnlyMemory<byte> CompressZStd(ReadOnlyMemory<byte> data)
+        {
+            var source = data.ToArray();
+            using var compressor = new Compressor();
+            var compressed = compressor.Wrap(source);
+            return compressed.ToArray();
+        }
+
+        private ReadOnlyMemory<byte> DecompressZStd(ReadOnlyMemory<byte> compressed, ulong uncompressedSize)
+        {
+            var source = compressed.ToArray();
+            using var decompressor = new Decompressor();
+            var decompressed = decompressor.Unwrap(source);
+
+            if ((ulong)decompressed.Length != uncompressedSize)
+            {
+                throw new InvalidDataException($"Decompressed size mismatch: expected {uncompressedSize}, got {decompressed.Length}");
+            }
+
+            return decompressed.ToArray();
+        }
+
         public ReadOnlyMemory<byte> ApplyByteShuffle(ReadOnlyMemory<byte> data, uint itemSize)
         {
             if (itemSize <= 1)
@@ -231,6 +259,7 @@ namespace XisfLib.Core.Implementations
                 XisfCompressionCodec.Zlib or XisfCompressionCodec.ZlibSh => uint.MaxValue,
                 XisfCompressionCodec.LZ4 or XisfCompressionCodec.LZ4Sh => uint.MaxValue,
                 XisfCompressionCodec.LZ4HC or XisfCompressionCodec.LZ4HCSh => uint.MaxValue,
+                XisfCompressionCodec.Zstd or XisfCompressionCodec.ZstdSh => uint.MaxValue,
                 _ => uint.MaxValue
             };
         }

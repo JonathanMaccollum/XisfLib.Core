@@ -354,7 +354,8 @@ namespace XisfLib.Core.Implementations
         {
             return codec == XisfCompressionCodec.ZlibSh ||
                    codec == XisfCompressionCodec.LZ4Sh ||
-                   codec == XisfCompressionCodec.LZ4HCSh;
+                   codec == XisfCompressionCodec.LZ4HCSh ||
+                   codec == XisfCompressionCodec.ZstdSh;
         }
 
         private static string ToHexString(ReadOnlySpan<byte> data)
