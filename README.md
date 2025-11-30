@@ -19,7 +19,7 @@ If you're processing astrophotography data, PixInsight is the tool to use.
 - **Multiple storage models**: Monolithic (single file) and distributed formats
 - **Flexible image support**: Arbitrary dimensionality (1D, 2D, 3D+), multiple channels
 - **Color spaces**: Grayscale, RGB, CIE L*a*b*, ICC profiles
-- **Data compression**: zlib, LZ4, LZ4HC with optional byte shuffling
+- **Data compression**: zlib, LZ4, LZ4HC with optional byte shuffling, ZStd, ZStdSH
 - **Rich metadata**: FITS header compatibility, custom properties
 - **Data types**: 8/16/32/64-bit integers, IEEE 754 floats (32/64/128-bit)
 
