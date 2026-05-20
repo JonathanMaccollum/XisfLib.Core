@@ -37,7 +37,7 @@ namespace XisfLib.Core.Implementations
         {
             // Read and validate file header (16 bytes)
             var headerBytes = new byte[16];
-            await stream.ReadAsync(headerBytes.AsMemory(0, 16), cancellationToken);
+            await stream.ReadExactlyAsync(headerBytes.AsMemory(0, 16), cancellationToken);
 
             var fileHeader = ParseFileHeader(headerBytes);
             if (!fileHeader.IsValid)
@@ -45,7 +45,7 @@ namespace XisfLib.Core.Implementations
 
             // Read XML header
             var xmlHeaderBytes = new byte[fileHeader.HeaderLength];
-            await stream.ReadAsync(xmlHeaderBytes.AsMemory(0, (int)fileHeader.HeaderLength), cancellationToken);
+            await stream.ReadExactlyAsync(xmlHeaderBytes.AsMemory(0, (int)fileHeader.HeaderLength), cancellationToken);
 
             var xmlHeaderText = Encoding.UTF8.GetString(xmlHeaderBytes);
             var xmlDocument = XDocument.Parse(xmlHeaderText);
@@ -103,7 +103,7 @@ namespace XisfLib.Core.Implementations
         {
             // Read and validate file header (16 bytes)
             var headerBytes = new byte[16];
-            await stream.ReadAsync(headerBytes.AsMemory(0, 16), cancellationToken);
+            await stream.ReadExactlyAsync(headerBytes.AsMemory(0, 16), cancellationToken);
 
             var fileHeader = ParseFileHeader(headerBytes);
             if (!fileHeader.IsValid)
@@ -111,7 +111,7 @@ namespace XisfLib.Core.Implementations
 
             // Read XML header
             var xmlHeaderBytes = new byte[fileHeader.HeaderLength];
-            await stream.ReadAsync(xmlHeaderBytes.AsMemory(0, (int)fileHeader.HeaderLength), cancellationToken);
+            await stream.ReadExactlyAsync(xmlHeaderBytes.AsMemory(0, (int)fileHeader.HeaderLength), cancellationToken);
 
             var xmlHeaderText = Encoding.UTF8.GetString(xmlHeaderBytes);
             var xmlDocument = XDocument.Parse(xmlHeaderText);
