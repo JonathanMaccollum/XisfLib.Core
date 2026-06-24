@@ -1,6 +1,7 @@
 # Build outputs
 bin/
 obj/
+nupkg/
 
 # User-specific files
 *.user

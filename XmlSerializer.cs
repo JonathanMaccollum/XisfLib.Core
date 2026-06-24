@@ -657,11 +657,13 @@ namespace XisfLib.Core.Implementations
 
         private string FormatChecksum(XisfChecksum checksum)
         {
+            // Emit the spec-compliant hyphenated names (§10.5 Table 9) so files written by
+            // this library round-trip through PixInsight and other spec-conformant readers.
             var algorithmStr = checksum.Algorithm switch
             {
-                XisfHashAlgorithm.SHA1 => "sha1",
-                XisfHashAlgorithm.SHA256 => "sha256",
-                XisfHashAlgorithm.SHA512 => "sha512",
+                XisfHashAlgorithm.SHA1 => "sha-1",
+                XisfHashAlgorithm.SHA256 => "sha-256",
+                XisfHashAlgorithm.SHA512 => "sha-512",
                 XisfHashAlgorithm.SHA3_256 => "sha3-256",
                 XisfHashAlgorithm.SHA3_512 => "sha3-512",
                 _ => throw new NotSupportedException($"Unsupported hash algorithm: {checksum.Algorithm}")
@@ -733,11 +735,14 @@ namespace XisfLib.Core.Implementations
                 throw new FormatException($"Invalid checksum format: {checksumStr}");
 
             var algorithmStr = parts[0].ToLowerInvariant();
+            // The XISF 1.0 spec (§10.5 Table 9) names the SHA-2 family with a hyphen
+            // (sha-1/sha-256/sha-512), which is what PixInsight and N.I.N.A. write. Accept
+            // both the spec form and the legacy non-hyphenated form this library used to emit.
             var algorithm = algorithmStr switch
             {
-                "sha1" => XisfHashAlgorithm.SHA1,
-                "sha256" => XisfHashAlgorithm.SHA256,
-                "sha512" => XisfHashAlgorithm.SHA512,
+                "sha-1" or "sha1" => XisfHashAlgorithm.SHA1,
+                "sha-256" or "sha256" => XisfHashAlgorithm.SHA256,
+                "sha-512" or "sha512" => XisfHashAlgorithm.SHA512,
                 "sha3-256" => XisfHashAlgorithm.SHA3_256,
                 "sha3-512" => XisfHashAlgorithm.SHA3_512,
                 _ => throw new FormatException($"Unsupported hash algorithm: {algorithmStr}")
