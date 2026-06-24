@@ -7,7 +7,7 @@
 
     <!-- NuGet Package -->
     <PackageId>XisfLib.Core</PackageId>
-    <Version>1.1.2</Version>
+    <Version>1.1.3</Version>
     <Authors>Jonathan MacCollum</Authors>
     <Description>A .NET library for reading and writing XISF (Extensible Image Serialization Format) files</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
