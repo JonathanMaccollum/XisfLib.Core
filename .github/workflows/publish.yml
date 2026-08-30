@@ -1,15 +1,32 @@
 name: Publish to NuGet
 
+# One-action release: every push to main packs and publishes a new NuGet version, so
+# routine maintenance (dependency bumps, small fixes) never needs a version edit or a
+# manual tag. The version is VersionPrefix (the only line maintained in the csproj —
+# bump it only for a new major/minor) plus the workflow run number as the patch,
+# e.g. VersionPrefix 1.2 -> 1.2.<run_number>. The published version is tagged back to
+# the repo for traceability. Docs-only pushes don't release. Mirrors the
+# EigenFrame.PreProcessing construct; auth stays this repo's NuGet trusted publishing.
+
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    paths-ignore:
+      - 'Journal/**'
+      - 'README.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create/push the v<version> tag
+  id-token: write   # OIDC token for NuGet trusted publishing
+
+concurrency:
+  group: xisflib-publish
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write   # OIDC token for NuGet trusted publishing
     steps:
       - uses: actions/checkout@v4
 
@@ -18,11 +35,18 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Compute version
+        id: ver
+        run: |
+          PREFIX=$(grep -oP '(?<=<VersionPrefix>)[^<]+' XisfLib.Core.csproj)
+          if [ -z "$PREFIX" ]; then echo "::error::VersionPrefix not found in csproj"; exit 1; fi
+          echo "version=$PREFIX.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
       - name: Build
-        run: dotnet build -c Release
+        run: dotnet build -c Release -p:Version=${{ steps.ver.outputs.version }}
 
       - name: Pack
-        run: dotnet pack -c Release --no-build
+        run: dotnet pack -c Release --no-build -p:Version=${{ steps.ver.outputs.version }} -o artifacts
 
       - name: NuGet login (OIDC -> short-lived API key)
         uses: NuGet/login@v1
@@ -31,4 +55,10 @@ jobs:
           user: ${{ secrets.NUGET_USER }}
 
       - name: Push to NuGet
-        run: dotnet nuget push **/*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: dotnet nuget push artifacts/*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+      - name: Tag the published version
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          git tag "$TAG"
+          git push origin "$TAG"

@@ -7,7 +7,15 @@
 
     <!-- NuGet Package -->
     <PackageId>XisfLib.Core</PackageId>
-    <Version>1.1.3</Version>
+    <!-- Single source of truth for the version. This is the ONLY line to touch, and only
+         when cutting a new major/minor. CI (publish.yml, on push to main) appends the
+         patch as VersionPrefix.<github.run_number> and publishes automatically, so routine
+         maintenance needs no version edit at all. The published version is tagged back to
+         the repo. A plain local `dotnet pack` (no Version override) produces VersionPrefix.0 —
+         fine for local testing. 1.2 marks the switch from manual version+tag releases;
+         the prefix must stay >= 1.2 so run-number patches always sort above the last
+         manually-published 1.1.3. -->
+    <VersionPrefix>1.2</VersionPrefix>
     <Authors>Jonathan MacCollum</Authors>
     <Description>A .NET library for reading and writing XISF (Extensible Image Serialization Format) files</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
