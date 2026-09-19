@@ -150,42 +150,30 @@ namespace XisfLib.Core
             var streamResolver = _componentFactory.CreateStreamResolver(Options.FileStreamProvider);
             var dataBlockProcessor = _componentFactory.CreateDataBlockProcessor(compressionProvider, checksumProvider);
 
-            // Step 1: Extract pixel data from all images and prepare for compression
-            var imageData = new System.Collections.Generic.List<(XisfImage Image, ReadOnlyMemory<byte> PixelData)>();
+            // Step 1: Produce the stored bytes of every image block, then its checksum: the digest
+            // covers the stored (post-compression) bytes, so both must exist before the header.
+            var processedImageData = new System.Collections.Generic.List<(XisfImage Image, ReadOnlyMemory<byte> ProcessedData, XisfCompression? Compression, XisfChecksum? Checksum)>();
 
             foreach (var image in unit.Images)
             {
                 var pixelData = await ExtractPixelDataAsync(image, dataBlockProcessor, cancellationToken);
-                imageData.Add((image, pixelData));
-            }
+                var (storedData, compression) = dataBlockProcessor.CompressBlock(
+                    pixelData,
+                    RequestedCompression(image));
 
-            // Step 2: Apply compression if requested
-            var processedImageData = new System.Collections.Generic.List<(XisfImage Image, ReadOnlyMemory<byte> ProcessedData, XisfCompression? Compression)>();
-
-            foreach (var (image, pixelData) in imageData)
-            {
-                ReadOnlyMemory<byte> processedData = pixelData;
-                XisfCompression? compression = null;
-
-                if (Options.DefaultCompression.HasValue)
+                XisfChecksum? checksum = null;
+                if (Options.CalculateChecksums)
                 {
-                    var itemSize = (uint)image.SampleFormat.GetItemSize();
-                    var uncompressedSize = (ulong)pixelData.Length;
-
-                    compression = new XisfCompression(
-                        Options.DefaultCompression.Value,
-                        uncompressedSize,
-                        itemSize);
-
-                    processedData = await compressionProvider.CompressAsync(pixelData, compression, cancellationToken);
+                    var digest = await checksumProvider.CalculateAsync(
+                        storedData, Options.ChecksumAlgorithm, cancellationToken);
+                    checksum = new XisfChecksum(Options.ChecksumAlgorithm, digest);
                 }
 
-                processedImageData.Add((image, processedData, compression));
+                processedImageData.Add((image, storedData, compression, checksum));
             }
 
             // Step 3: Calculate attachment positions
             // Start after file header (16 bytes) + XML header (to be calculated)
-            var tempImages = new System.Collections.Generic.List<XisfImage>();
             ulong currentPosition = 16; // File header size
 
             // First, create a temporary XML to calculate its size
@@ -193,11 +181,10 @@ namespace XisfLib.Core
             var tempRoot = tempXmlDoc.Root!;
 
             // Add temporary images with placeholder positions
-            foreach (var (image, processedData, compression) in processedImageData)
+            foreach (var (image, _, compression, checksum) in processedImageData)
             {
-                var tempBlock = new AttachedDataBlock(0, 0, Compression: compression);
+                var tempBlock = new AttachedDataBlock(0, 0, Checksum: checksum, Compression: compression);
                 var tempImage = image with { PixelData = tempBlock };
-                tempImages.Add(tempImage);
 
                 var tempImageElement = xmlSerializer.SerializeImage(tempImage, Options);
                 tempRoot.Add(tempImageElement);
@@ -238,10 +225,11 @@ namespace XisfLib.Core
 
                 for (int i = 0; i < processedImageData.Count; i++)
                 {
-                    var (image, processedData, compression) = processedImageData[i];
+                    var (image, processedData, compression, checksum) = processedImageData[i];
                     var size = (ulong)processedData.Length;
 
-                    var attachedBlock = new AttachedDataBlock(currentPosition, size, Compression: compression);
+                    var attachedBlock = new AttachedDataBlock(
+                        currentPosition, size, Checksum: checksum, Compression: compression);
                     var finalImage = image with { PixelData = attachedBlock };
                     finalImages.Add(finalImage);
 
@@ -300,11 +288,29 @@ namespace XisfLib.Core
             // Step 8: Write attached data blocks in order
             for (int i = 0; i < processedImageData.Count; i++)
             {
-                var (_, processedData, _) = processedImageData[i];
+                var processedData = processedImageData[i].ProcessedData;
                 await stream.WriteAsync(processedData.ToArray(), 0, processedData.Length, cancellationToken);
             }
 
             await stream.FlushAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// A block that carries its own compression record governs; the writer option applies only
+        /// to blocks that declare none.
+        /// </summary>
+        private XisfCompression? RequestedCompression(XisfImage image)
+        {
+            if (image.PixelData.Compression != null)
+                return image.PixelData.Compression;
+
+            if (!Options.DefaultCompression.HasValue)
+                return null;
+
+            return new XisfCompression(
+                Options.DefaultCompression.Value,
+                0,
+                (uint)image.SampleFormat.GetItemSize());
         }
 
         private Task WriteDistributedAsync(XisfUnit unit, string filePath, CancellationToken cancellationToken)

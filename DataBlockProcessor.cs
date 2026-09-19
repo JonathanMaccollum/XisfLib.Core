@@ -1,7 +1,7 @@
 using System;
-using System.Buffers;
+using System.Collections.Generic;
 using System.IO;
-using System.Runtime.InteropServices;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -36,6 +36,7 @@ namespace XisfLib.Core.Implementations
             XisfDataBlock block,
             Stream source,
             XisfReaderOptions options,
+            int itemSize = 1,
             CancellationToken cancellationToken = default)
         {
             if (block == null)
@@ -45,42 +46,169 @@ namespace XisfLib.Core.Implementations
             if (options == null)
                 throw new ArgumentNullException(nameof(options));
 
-            ReadOnlyMemory<byte> data = block switch
+            RejectUnsupported(block);
+
+            ReadOnlyMemory<byte> stored = block switch
             {
-                InlineDataBlock inline => DecodeData(inline.Data.ToString() ?? string.Empty, inline.Encoding),
-                EmbeddedDataBlock embedded => DecodeData(embedded.Data.ToString() ?? string.Empty, embedded.Encoding),
+                InlineDataBlock inline => inline.Data,
+                EmbeddedDataBlock embedded => embedded.Data,
                 AttachedDataBlock attached => await ReadAttachedBlockAsync(attached, source, cancellationToken),
                 ExternalDataBlock external => await ReadExternalBlockAsync(external, cancellationToken),
                 _ => throw new NotSupportedException($"Unsupported data block type: {block.GetType().Name}")
             };
 
-            // Validate checksum if present and validation is enabled
+            return Materialize(stored, block, options, itemSize);
+        }
+
+        public ReadOnlyMemory<byte> ReadDataBlock(
+            XisfDataBlock block,
+            Stream? source,
+            XisfReaderOptions options,
+            int itemSize = 1)
+        {
+            if (block == null)
+                throw new ArgumentNullException(nameof(block));
+            if (options == null)
+                throw new ArgumentNullException(nameof(options));
+
+            RejectUnsupported(block);
+
+            ReadOnlyMemory<byte> stored = block switch
+            {
+                InlineDataBlock inline => inline.Data,
+                EmbeddedDataBlock embedded => embedded.Data,
+                AttachedDataBlock attached => ReadAttachedBlock(attached, source),
+                ExternalDataBlock => throw new NotSupportedException(
+                    "External data blocks can only be read through the asynchronous read path"),
+                _ => throw new NotSupportedException($"Unsupported data block type: {block.GetType().Name}")
+            };
+
+            return Materialize(stored, block, options, itemSize);
+        }
+
+        /// <summary>
+        /// Applies, in §10.5/§10.6/§10.4 order, checksum verification (never after decompression),
+        /// decompression, removal of byte shuffling and byte-order conversion of the logical data.
+        /// </summary>
+        private ReadOnlyMemory<byte> Materialize(
+            ReadOnlyMemory<byte> stored,
+            XisfDataBlock block,
+            XisfReaderOptions options,
+            int itemSize)
+        {
             if (options.ValidateChecksums && block.Checksum != null)
             {
-                bool isValid = await _checksumProvider.ValidateAsync(data, block.Checksum, cancellationToken);
-                if (!isValid)
+                if (!_checksumProvider.SupportedAlgorithms.Contains(block.Checksum.Algorithm))
+                {
+                    throw new XisfUnsupportedObjectException(
+                        $"Data block declares the {block.Checksum.Algorithm} hashing algorithm, " +
+                        "which this build cannot compute");
+                }
+
+                if (!_checksumProvider.Validate(stored, block.Checksum))
                 {
                     throw new InvalidDataException("Data block checksum validation failed");
                 }
             }
 
-            // Decompress if needed
-            if (block.Compression != null)
+            var data = block.Compression != null ? DecompressBlock(stored, block.Compression) : stored;
+
+            if (block.ByteOrder != XisfByteOrder.LittleEndian)
             {
-                data = await _compressionProvider.DecompressAsync(data, block.Compression, cancellationToken);
-                
-                // Remove byte shuffling if specified
-                if (IsShuffledCodec(block.Compression.Codec) && block.Compression.ItemSize.HasValue)
-                {
-                    data = _compressionProvider.RemoveByteShuffle(data, block.Compression.ItemSize.Value);
-                }
+                data = ConvertByteOrder(data, block.ByteOrder, XisfByteOrder.LittleEndian, itemSize);
             }
 
-            // Convert byte order if needed
-            // Note: We need additional context (item size) to properly convert byte order
-            // This would typically come from the image or property metadata
-            
             return data;
+        }
+
+        private static void RejectUnsupported(XisfDataBlock block)
+        {
+            if (block.UnsupportedDeclaration != null)
+                throw new XisfUnsupportedObjectException(block.UnsupportedDeclaration);
+        }
+
+        private ReadOnlyMemory<byte> DecompressBlock(ReadOnlyMemory<byte> stored, XisfCompression compression)
+        {
+            ReadOnlyMemory<byte> data;
+
+            if (compression.Subblocks is { Count: > 0 })
+            {
+                var output = new byte[compression.UncompressedSize];
+                var read = 0;
+                var written = 0;
+
+                foreach (var subblock in compression.Subblocks)
+                {
+                    var piece = _compressionProvider.Decompress(
+                        stored.Slice(read, (int)subblock.CompressedLength),
+                        compression.Codec,
+                        subblock.UncompressedLength);
+
+                    piece.Span.CopyTo(output.AsSpan(written));
+                    read += (int)subblock.CompressedLength;
+                    written += piece.Length;
+                }
+
+                data = output;
+            }
+            else
+            {
+                data = _compressionProvider.Decompress(stored, compression.Codec, compression.UncompressedSize);
+            }
+
+            if (IsShuffledCodec(compression.Codec) && compression.ItemSize.HasValue)
+            {
+                data = _compressionProvider.RemoveByteShuffle(data, compression.ItemSize.Value);
+            }
+
+            return data;
+        }
+
+        public (ReadOnlyMemory<byte> Stored, XisfCompression? Compression) CompressBlock(
+            ReadOnlyMemory<byte> data,
+            XisfCompression? compression)
+        {
+            if (compression == null)
+                return (data, null);
+
+            var payload = data;
+            if (IsShuffledCodec(compression.Codec) && compression.ItemSize.HasValue)
+            {
+                payload = _compressionProvider.ApplyByteShuffle(payload, compression.ItemSize.Value);
+            }
+
+            var final = compression with { UncompressedSize = (ulong)data.Length, Subblocks = null };
+
+            if (compression.Subblocks is { Count: > 1 } &&
+                compression.Subblocks.Aggregate(0UL, (sum, s) => sum + s.UncompressedLength) == (ulong)payload.Length)
+            {
+                var pieces = new List<ReadOnlyMemory<byte>>();
+                var subblocks = new List<XisfCompressionSubblock>();
+                var offset = 0;
+
+                foreach (var declared in compression.Subblocks)
+                {
+                    var piece = _compressionProvider.Compress(
+                        payload.Slice(offset, (int)declared.UncompressedLength),
+                        compression.Codec);
+
+                    pieces.Add(piece);
+                    subblocks.Add(new XisfCompressionSubblock((ulong)piece.Length, declared.UncompressedLength));
+                    offset += (int)declared.UncompressedLength;
+                }
+
+                var stored = new byte[pieces.Sum(p => p.Length)];
+                var written = 0;
+                foreach (var piece in pieces)
+                {
+                    piece.Span.CopyTo(stored.AsSpan(written));
+                    written += piece.Length;
+                }
+
+                return (stored, final with { Subblocks = subblocks });
+            }
+
+            return (_compressionProvider.Compress(payload, compression.Codec), final);
         }
 
         /// <summary>
@@ -101,31 +229,7 @@ namespace XisfLib.Core.Implementations
             if (options == null)
                 throw new ArgumentNullException(nameof(options));
 
-            var processedData = data;
-
-            // Apply compression if specified
-            if (block.Compression != null)
-            {
-                // Apply byte shuffling if specified
-                if (IsShuffledCodec(block.Compression.Codec) && block.Compression.ItemSize.HasValue)
-                {
-                    processedData = _compressionProvider.ApplyByteShuffle(processedData, block.Compression.ItemSize.Value);
-                }
-                
-                processedData = await _compressionProvider.CompressAsync(processedData, block.Compression, cancellationToken);
-            }
-
-            // Calculate checksum if requested
-            if (options.CalculateChecksums && block is AttachedDataBlock or ExternalDataBlock)
-            {
-                var checksum = await _checksumProvider.CalculateAsync(
-                    processedData, 
-                    options.ChecksumAlgorithm, 
-                    cancellationToken);
-                
-                // Note: We'd need to update the block's checksum here, but records are immutable
-                // This would require creating a new block instance with the checksum
-            }
+            var (processedData, _) = CompressBlock(data, block.Compression);
 
             // Write based on block type
             switch (block)
@@ -240,6 +344,17 @@ namespace XisfLib.Core.Implementations
                 XisfByteOrder.BigEndian => systemIsLittleEndian,
                 _ => false
             };
+        }
+
+        private static ReadOnlyMemory<byte> ReadAttachedBlock(AttachedDataBlock block, Stream? source)
+        {
+            if (source == null)
+                throw new InvalidOperationException("An attached data block requires the containing stream");
+
+            source.Position = (long)block.Position;
+            var buffer = new byte[block.Size];
+            source.ReadExactly(buffer);
+            return buffer;
         }
 
         private async Task<ReadOnlyMemory<byte>> ReadAttachedBlockAsync(

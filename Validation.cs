@@ -9,9 +9,9 @@ namespace XisfLib.Core.Implementations
     /// </summary>
     internal sealed class XisfValidator : IXisfValidator
     {
-        // Property identifier regex per specification: [_a-zA-Z][_a-zA-Z0-9]*(::[_a-zA-Z][_a-zA-Z0-9]*)*
+        // Property identifier regex per §8.4.1: [_a-zA-Z][_a-zA-Z0-9]*(:[_a-zA-Z][_a-zA-Z0-9]*)*
         private static readonly Regex PropertyIdRegex = new(
-            @"^[_a-zA-Z][_a-zA-Z0-9]*(::[_a-zA-Z][_a-zA-Z0-9]*)*$",
+            @"^[_a-zA-Z][_a-zA-Z0-9]*(:[_a-zA-Z][_a-zA-Z0-9]*)*$",
             RegexOptions.Compiled);
 
         // Unique element identifier regex: [_a-zA-Z][_a-zA-Z0-9]*
@@ -93,6 +93,23 @@ namespace XisfLib.Core.Implementations
                 warnings.Add("Storage model not specified");
             }
 
+            if (unit.Images != null)
+            {
+                var seenImageIds = new HashSet<string>(System.StringComparer.Ordinal);
+                foreach (var image in unit.Images)
+                {
+                    var imageResult = ValidateImage(image);
+                    errors.AddRange(imageResult.Errors);
+                    warnings.AddRange(imageResult.Warnings);
+
+                    // Rev-1 §11.5: image identifiers must be unique within an XISF unit.
+                    if (!string.IsNullOrEmpty(image.ImageId) && !seenImageIds.Add(image.ImageId))
+                    {
+                        errors.Add($"Duplicate image identifier: {image.ImageId}");
+                    }
+                }
+            }
+
             return new ValidationResult(errors.Count == 0, errors, warnings);
         }
 
@@ -139,6 +156,13 @@ namespace XisfLib.Core.Implementations
                 warnings.Add("RGB color space typically requires at least 3 channels");
             }
 
+            // §10.6.2: a byte-shuffling codec cannot be applied without an item size.
+            var compression = image.PixelData?.Compression;
+            if (compression != null && !compression.ItemSize.HasValue && IsShuffledCodec(compression.Codec))
+            {
+                errors.Add($"Compression codec {compression.Codec} requires an item size for byte shuffling");
+            }
+
             // Validate associated properties
             if (image.Properties != null)
             {
@@ -177,5 +201,11 @@ namespace XisfLib.Core.Implementations
 
             return UniqueIdRegex.IsMatch(uid);
         }
+
+        private static bool IsShuffledCodec(XisfCompressionCodec codec)
+            => codec is XisfCompressionCodec.ZlibSh
+                     or XisfCompressionCodec.LZ4Sh
+                     or XisfCompressionCodec.LZ4HCSh
+                     or XisfCompressionCodec.ZstdSh;
     }
 }

@@ -15,7 +15,7 @@
          fine for local testing. 1.2 marks the switch from manual version+tag releases;
          the prefix must stay >= 1.2 so run-number patches always sort above the last
          manually-published 1.1.3. -->
-    <VersionPrefix>1.2</VersionPrefix>
+    <VersionPrefix>1.3</VersionPrefix>
     <Authors>Jonathan MacCollum</Authors>
     <Description>A .NET library for reading and writing XISF (Extensible Image Serialization Format) files</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -23,7 +23,15 @@
     <RepositoryUrl>https://github.com/JonathanMaccollum/XisfLib.Core</RepositoryUrl>
     <PackageTags>xisf;astronomy;astrophotography;pixinsight;image</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>https://github.com/JonathanMaccollum/XisfLib.Core/blob/main/CHANGELOG.md</PackageReleaseNotes>
   </PropertyGroup>
+
+  <!-- The test project lives under Tests/ beside this one; the implicit globs must not pull its
+       sources into the library. -->
+  <ItemGroup>
+    <Compile Remove="Tests/**" />
+    <None Remove="Tests/**" />
+  </ItemGroup>
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />

@@ -14,6 +14,7 @@ on:
     paths-ignore:
       - 'Journal/**'
       - 'README.md'
+      - 'CHANGELOG.md'
   workflow_dispatch:
 
 permissions:
@@ -44,6 +45,13 @@ jobs:
 
       - name: Build
         run: dotnet build -c Release -p:Version=${{ steps.ver.outputs.version }}
+
+      # The test project is not part of the root build (the library csproj excludes Tests/**), so
+      # this step restores and builds it itself. Every push to main publishes, so this is the gate.
+      - name: Test
+        # Version is passed through so the referenced library builds identically to the Build step
+        # and the subsequent --no-build pack still packs version-stamped assemblies.
+        run: dotnet test Tests/XisfLib.Core.Tests.csproj -c Release -p:Version=${{ steps.ver.outputs.version }}
 
       - name: Pack
         run: dotnet pack -c Release --no-build -p:Version=${{ steps.ver.outputs.version }} -o artifacts

@@ -58,20 +58,22 @@ namespace XisfLib.Core.Implementations
             var imageElements = root.Elements().Where(e => e.Name.LocalName == "Image").ToList();
             var images = new List<XisfImage>();
 
+            XisfBlockReader blockReader = (block, itemSize) =>
+                _dataBlockProcessor.ReadDataBlock(block, stream, options, itemSize);
+
             foreach (var imageElement in imageElements)
             {
-                var image = _xmlSerializer.DeserializeImage(imageElement);
+                var image = _xmlSerializer.DeserializeImage(imageElement, blockReader);
 
-                // If image has attached data block, read it
-                if (image.PixelData is AttachedDataBlock attachedBlock)
+                if (image.PixelData is not ExternalDataBlock)
                 {
                     var pixelData = await _dataBlockProcessor.ReadDataBlockAsync(
-                        attachedBlock,
+                        image.PixelData,
                         stream,
                         options,
+                        ByteOrderItemSize(image.SampleFormat),
                         cancellationToken);
 
-                    // Update image with actual pixel data
                     image = image with
                     {
                         PixelData = new InlineDataBlock(pixelData, XisfEncoding.Base64)
@@ -88,7 +90,7 @@ namespace XisfLib.Core.Implementations
 
             foreach (var propElement in propertyElements)
             {
-                globalProperties.Add(_xmlSerializer.DeserializeProperty(propElement));
+                globalProperties.Add(_xmlSerializer.DeserializeProperty(propElement, blockReader));
             }
 
             return new XisfUnit(
@@ -98,6 +100,17 @@ namespace XisfLib.Core.Implementations
                 globalProperties
             );
         }
+
+        /// <summary>
+        /// §10.4: byte order applies to the ordered multibyte units of the logical data. For the
+        /// complex formats that unit is the component, not the whole sample.
+        /// </summary>
+        internal static int ByteOrderItemSize(XisfSampleFormat format) => format switch
+        {
+            XisfSampleFormat.Complex32 => 4,
+            XisfSampleFormat.Complex64 => 8,
+            _ => format.GetItemSize()
+        };
 
         public async Task<XisfMetadataUnit> ReadMetadataAsync(Stream stream, XisfReaderOptions options, CancellationToken cancellationToken = default)
         {
@@ -124,9 +137,12 @@ namespace XisfLib.Core.Implementations
             var imageElements = root.Elements().Where(e => e.Name.LocalName == "Image").ToList();
             var imageMetadataList = new List<XisfImageMetadata>();
 
+            XisfBlockReader blockReader = (block, itemSize) =>
+                _dataBlockProcessor.ReadDataBlock(block, stream, options, itemSize);
+
             foreach (var imageElement in imageElements)
             {
-                var image = _xmlSerializer.DeserializeImage(imageElement);
+                var image = _xmlSerializer.DeserializeImage(imageElement, blockReader);
 
                 // Extract data block info without loading pixel data
                 XisfDataBlockInfo dataBlockInfo;
@@ -148,6 +164,16 @@ namespace XisfLib.Core.Implementations
                         inlineBlock.ByteOrder,
                         inlineBlock.Checksum,
                         inlineBlock.Compression
+                    );
+                }
+                else if (image.PixelData is EmbeddedDataBlock embeddedBlock)
+                {
+                    dataBlockInfo = new XisfDataBlockInfo(
+                        0,
+                        (ulong)embeddedBlock.Data.Length,
+                        embeddedBlock.ByteOrder,
+                        embeddedBlock.Checksum,
+                        embeddedBlock.Compression
                     );
                 }
                 else
@@ -182,7 +208,7 @@ namespace XisfLib.Core.Implementations
 
             foreach (var propElement in propertyElements)
             {
-                globalProperties.Add(_xmlSerializer.DeserializeProperty(propElement));
+                globalProperties.Add(_xmlSerializer.DeserializeProperty(propElement, blockReader));
             }
 
             return new XisfMetadataUnit(
@@ -239,9 +265,12 @@ namespace XisfLib.Core.Implementations
             var imageElements = root.Elements().Where(e => e.Name.LocalName == "Image").ToList();
             var images = new List<XisfImage>();
 
+            XisfBlockReader blockReader = (block, itemSize) =>
+                _dataBlockProcessor.ReadDataBlock(block, null, options, itemSize);
+
             foreach (var imageElement in imageElements)
             {
-                var image = _xmlSerializer.DeserializeImage(imageElement);
+                var image = _xmlSerializer.DeserializeImage(imageElement, blockReader);
 
                 // For distributed storage, external blocks need to be resolved
                 if (image.PixelData is ExternalDataBlock externalBlock)
@@ -254,6 +283,7 @@ namespace XisfLib.Core.Implementations
                             externalBlock,
                             stream, // Will be resolved by the stream resolver
                             options,
+                            MonolithicStorageStrategy.ByteOrderItemSize(image.SampleFormat),
                             cancellationToken);
 
                         image = image with
@@ -273,7 +303,7 @@ namespace XisfLib.Core.Implementations
 
             foreach (var propElement in propertyElements)
             {
-                globalProperties.Add(_xmlSerializer.DeserializeProperty(propElement));
+                globalProperties.Add(_xmlSerializer.DeserializeProperty(propElement, blockReader));
             }
 
             // Determine the data block files (would need to be provided or discovered)
@@ -301,9 +331,12 @@ namespace XisfLib.Core.Implementations
             var imageElements = root.Elements().Where(e => e.Name.LocalName == "Image").ToList();
             var imageMetadataList = new List<XisfImageMetadata>();
 
+            XisfBlockReader blockReader = (block, itemSize) =>
+                _dataBlockProcessor.ReadDataBlock(block, null, options, itemSize);
+
             foreach (var imageElement in imageElements)
             {
-                var image = _xmlSerializer.DeserializeImage(imageElement);
+                var image = _xmlSerializer.DeserializeImage(imageElement, blockReader);
 
                 // Extract data block info without loading pixel data
                 XisfDataBlockInfo dataBlockInfo;
@@ -359,7 +392,7 @@ namespace XisfLib.Core.Implementations
 
             foreach (var propElement in propertyElements)
             {
-                globalProperties.Add(_xmlSerializer.DeserializeProperty(propElement));
+                globalProperties.Add(_xmlSerializer.DeserializeProperty(propElement, blockReader));
             }
 
             // Determine the data block files (would need to be provided or discovered)

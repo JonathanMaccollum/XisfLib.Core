@@ -1,3 +1,5 @@
+using System.Xml.Linq;
+
 namespace XisfLib.Core;
 
 // ==================== Basic Enums (No Dependencies) ====================
@@ -121,7 +123,15 @@ public abstract record XisfDataBlock(
     XisfByteOrder ByteOrder = XisfByteOrder.LittleEndian,
     XisfChecksum? Checksum = null,
     XisfCompression? Compression = null
-);
+)
+{
+    /// <summary>
+    /// Describes a codec or checksum algorithm the header declares but this build cannot process.
+    /// Header parsing still succeeds; materializing this block throws
+    /// <see cref="XisfUnsupportedObjectException"/> while sibling blocks stay readable (§7).
+    /// </summary>
+    public string? UnsupportedDeclaration { get; init; }
+}
 
 public abstract record XisfCoreElement(string? Uid = null);
 
@@ -173,6 +183,12 @@ public sealed record XisfMatrixProperty<T>(
     string? Comment = null, 
     XisfPropertyFormat? Format = null
 ) : XisfProperty(Id, Comment, Format) where T : struct;
+
+/// <summary>
+/// A Property element whose declared type this build does not recognize. The element is carried
+/// verbatim so read-modify-write cycles cannot destroy it (§7 unrecognized-content rule).
+/// </summary>
+public sealed record XisfRawProperty(string Id, XElement Element) : XisfProperty(Id);
 
 public sealed record XisfTableProperty(
     string Id, 
@@ -356,7 +372,11 @@ public sealed record XisfMetadata(
     string? Languages = null,
     string? License = null,
     DateTimeOffset? OriginalCreationTime = null,
-    IReadOnlyList<string>? RelatedResources = null
+    IReadOnlyList<string>? RelatedResources = null,
+    ushort? BlockAlignmentSize = null,
+    string? ChecksumAlgorithms = null,
+    ushort? MaxInlineBlockSize = null,
+    string? OutputHints = null
 );
 
 public sealed record XisfImage(
@@ -373,13 +393,21 @@ public sealed record XisfImage(
     Guid? Uuid = null,
     IReadOnlyList<XisfProperty>? Properties = null,
     IReadOnlyList<XisfCoreElement>? AssociatedElements = null
-);
+)
+{
+    /// <summary>Image child elements this build does not recognize, carried verbatim.</summary>
+    public IReadOnlyList<XElement> UnknownElements { get; init; } = Array.Empty<XElement>();
+}
 
 public sealed record XisfHeader(
     XisfMetadata Metadata,
     IReadOnlyDictionary<string, XisfCoreElement> CoreElements,
     string? InitialComment = null
-);
+)
+{
+    /// <summary>Root child elements this build does not recognize, carried verbatim.</summary>
+    public IReadOnlyList<XElement> UnknownElements { get; init; } = Array.Empty<XElement>();
+}
 
 // ==================== Top-Level Container ====================
 

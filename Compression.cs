@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
 using ZstdSharp;
 
 namespace XisfLib.Core.Implementations
@@ -30,69 +28,41 @@ namespace XisfLib.Core.Implementations
             return SupportedCodecs.Contains(codec);
         }
 
-        public async Task<ReadOnlyMemory<byte>> CompressAsync(
-            ReadOnlyMemory<byte> data,
-            XisfCompression compression,
-            CancellationToken cancellationToken = default)
+        public ReadOnlyMemory<byte> Compress(ReadOnlyMemory<byte> data, XisfCompressionCodec codec)
         {
-            if (!SupportsCodec(compression.Codec))
+            if (!SupportsCodec(codec))
             {
-                throw new NotSupportedException($"Compression codec {compression.Codec} is not supported");
+                throw new NotSupportedException($"Compression codec {codec} is not supported");
             }
 
-            await Task.Yield(); // Cooperative async
-
-            var dataToCompress = data;
-
-            // Apply byte shuffling if needed
-            if (IsShuffledCodec(compression.Codec) && compression.ItemSize.HasValue)
+            return codec switch
             {
-                dataToCompress = ApplyByteShuffle(dataToCompress, compression.ItemSize.Value);
-            }
-
-            // Compress based on codec
-            return compression.Codec switch
-            {
-                XisfCompressionCodec.Zlib or XisfCompressionCodec.ZlibSh => CompressZlib(dataToCompress),
-                XisfCompressionCodec.LZ4 or XisfCompressionCodec.LZ4Sh => CompressLZ4(dataToCompress),
-                XisfCompressionCodec.LZ4HC or XisfCompressionCodec.LZ4HCSh => CompressLZ4HC(dataToCompress),
-                XisfCompressionCodec.Zstd or XisfCompressionCodec.ZstdSh => CompressZStd(dataToCompress),
-                _ => throw new NotSupportedException($"Unsupported codec: {compression.Codec}")
+                XisfCompressionCodec.Zlib or XisfCompressionCodec.ZlibSh => CompressZlib(data),
+                XisfCompressionCodec.LZ4 or XisfCompressionCodec.LZ4Sh => CompressLZ4(data),
+                XisfCompressionCodec.LZ4HC or XisfCompressionCodec.LZ4HCSh => CompressLZ4HC(data),
+                XisfCompressionCodec.Zstd or XisfCompressionCodec.ZstdSh => CompressZStd(data),
+                _ => throw new NotSupportedException($"Unsupported codec: {codec}")
             };
         }
 
-        public async Task<ReadOnlyMemory<byte>> DecompressAsync(
+        public ReadOnlyMemory<byte> Decompress(
             ReadOnlyMemory<byte> compressed,
-            XisfCompression compression,
-            CancellationToken cancellationToken = default)
+            XisfCompressionCodec codec,
+            ulong uncompressedSize)
         {
-            if (!SupportsCodec(compression.Codec))
+            if (!SupportsCodec(codec))
             {
-                throw new NotSupportedException($"Compression codec {compression.Codec} is not supported");
+                throw new NotSupportedException($"Compression codec {codec} is not supported");
             }
 
-            await Task.Yield(); // Cooperative async
-
-            // Decompress based on codec
-            // Note: Byte shuffling is handled by DataBlockProcessor, not here
-            var decompressed = compression.Codec switch
+            return codec switch
             {
-                XisfCompressionCodec.Zlib or XisfCompressionCodec.ZlibSh => DecompressZlib(compressed, compression.UncompressedSize),
-                XisfCompressionCodec.LZ4 or XisfCompressionCodec.LZ4Sh => DecompressLZ4(compressed, compression.UncompressedSize),
-                XisfCompressionCodec.LZ4HC or XisfCompressionCodec.LZ4HCSh => DecompressLZ4(compressed, compression.UncompressedSize),
-                XisfCompressionCodec.Zstd or XisfCompressionCodec.ZstdSh => DecompressZStd(compressed, compression.UncompressedSize),
-                _ => throw new NotSupportedException($"Unsupported codec: {compression.Codec}")
+                XisfCompressionCodec.Zlib or XisfCompressionCodec.ZlibSh => DecompressZlib(compressed, uncompressedSize),
+                XisfCompressionCodec.LZ4 or XisfCompressionCodec.LZ4Sh => DecompressLZ4(compressed, uncompressedSize),
+                XisfCompressionCodec.LZ4HC or XisfCompressionCodec.LZ4HCSh => DecompressLZ4(compressed, uncompressedSize),
+                XisfCompressionCodec.Zstd or XisfCompressionCodec.ZstdSh => DecompressZStd(compressed, uncompressedSize),
+                _ => throw new NotSupportedException($"Unsupported codec: {codec}")
             };
-
-            return decompressed;
-        }
-
-        private static bool IsShuffledCodec(XisfCompressionCodec codec)
-        {
-            return codec == XisfCompressionCodec.ZlibSh ||
-                   codec == XisfCompressionCodec.LZ4Sh ||
-                   codec == XisfCompressionCodec.LZ4HCSh ||
-                   codec == XisfCompressionCodec.ZstdSh;
         }
 
         private ReadOnlyMemory<byte> CompressZlib(ReadOnlyMemory<byte> data)

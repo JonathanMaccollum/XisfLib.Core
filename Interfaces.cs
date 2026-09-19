@@ -8,6 +8,12 @@ using System.Xml.Linq;
 namespace XisfLib.Core
 {
     /// <summary>
+    /// Materializes the value of a data block referenced by a header element, applying checksum
+    /// verification, decompression, unshuffling and byte-order conversion.
+    /// </summary>
+    internal delegate ReadOnlyMemory<byte> XisfBlockReader(XisfDataBlock block, int itemSize);
+
+    /// <summary>
     /// Provides XML serialization and deserialization for XISF headers and elements.
     /// Specification Reference: Section 9.5 XISF Header, Section 11 Core Elements
     /// </summary>
@@ -30,9 +36,10 @@ namespace XisfLib.Core
         XElement SerializeProperty(XisfProperty property, XisfWriterOptions options);
 
         /// <summary>
-        /// Deserializes an XISF property from an XML element.
+        /// Deserializes an XISF property from an XML element. Block-backed property values
+        /// (vectors, matrices and strings with a location attribute) need <paramref name="blockReader"/>.
         /// </summary>
-        XisfProperty DeserializeProperty(XElement element);
+        XisfProperty DeserializeProperty(XElement element, XisfBlockReader? blockReader = null);
 
         /// <summary>
         /// Serializes an XISF image to an XML element.
@@ -41,9 +48,10 @@ namespace XisfLib.Core
         XElement SerializeImage(XisfImage image, XisfWriterOptions options);
 
         /// <summary>
-        /// Deserializes an XISF image from an XML element.
+        /// Deserializes an XISF image from an XML element. Pixel data is described but not
+        /// materialized; <paramref name="blockReader"/> is used for the image's child properties.
         /// </summary>
-        XisfImage DeserializeImage(XElement element);
+        XisfImage DeserializeImage(XElement element, XisfBlockReader? blockReader = null);
 
         /// <summary>
         /// Serializes a core element to XML.
@@ -78,19 +86,39 @@ namespace XisfLib.Core
         /// Handles decompression, checksum validation, and byte order conversion.
         /// </summary>
         Task<ReadOnlyMemory<byte>> ReadDataBlockAsync(
-            XisfDataBlock block, 
-            Stream source, 
+            XisfDataBlock block,
+            Stream source,
             XisfReaderOptions options,
+            int itemSize = 1,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Synchronous counterpart of <see cref="ReadDataBlockAsync"/> for blocks reachable without
+        /// I/O beyond the containing stream (inline, embedded and attached locations).
+        /// </summary>
+        ReadOnlyMemory<byte> ReadDataBlock(
+            XisfDataBlock block,
+            Stream? source,
+            XisfReaderOptions options,
+            int itemSize = 1);
+
+        /// <summary>
+        /// Produces the stored bytes of a data block: byte shuffling (when the codec asks for it)
+        /// followed by compression of the whole block or of each declared subblock.
+        /// Specification Reference: Section 10.6
+        /// </summary>
+        (ReadOnlyMemory<byte> Stored, XisfCompression? Compression) CompressBlock(
+            ReadOnlyMemory<byte> data,
+            XisfCompression? compression);
 
         /// <summary>
         /// Writes a data block to a stream asynchronously.
         /// Handles compression, checksum generation, and byte order conversion.
         /// </summary>
         Task WriteDataBlockAsync(
-            XisfDataBlock block, 
-            ReadOnlyMemory<byte> data, 
-            Stream target, 
+            XisfDataBlock block,
+            ReadOnlyMemory<byte> data,
+            Stream target,
             XisfWriterOptions options,
             CancellationToken cancellationToken = default);
 
@@ -133,21 +161,19 @@ namespace XisfLib.Core
         bool SupportsCodec(XisfCompressionCodec codec);
 
         /// <summary>
-        /// Compresses data using the specified compression settings.
-        /// Specification Reference: Sections 10.6.3-10.6.8
+        /// Compresses data with a single codec. Byte shuffling is applied to the whole block by
+        /// <see cref="IDataBlockProcessor.CompressBlock"/> before this is called, never here.
+        /// Specification Reference: Sections 10.6.3-10.6.9
         /// </summary>
-        Task<ReadOnlyMemory<byte>> CompressAsync(
-            ReadOnlyMemory<byte> data, 
-            XisfCompression compression,
-            CancellationToken cancellationToken = default);
+        ReadOnlyMemory<byte> Compress(ReadOnlyMemory<byte> data, XisfCompressionCodec codec);
 
         /// <summary>
-        /// Decompresses data using the specified compression settings.
+        /// Decompresses data produced by <see cref="Compress"/>; unshuffling is the caller's job.
         /// </summary>
-        Task<ReadOnlyMemory<byte>> DecompressAsync(
-            ReadOnlyMemory<byte> compressed, 
-            XisfCompression compression,
-            CancellationToken cancellationToken = default);
+        ReadOnlyMemory<byte> Decompress(
+            ReadOnlyMemory<byte> compressed,
+            XisfCompressionCodec codec,
+            ulong uncompressedSize);
 
         /// <summary>
         /// Applies byte shuffling transformation for improved compression.
