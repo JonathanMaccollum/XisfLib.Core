@@ -135,7 +135,8 @@ public abstract record XisfDataBlock(
 )
 {
     /// <summary>
-    /// Describes a codec or checksum algorithm the header declares but this build cannot process.
+    /// Describes a codec or checksum algorithm the header declares but this build cannot process,
+    /// or a compression, subblocks or checksum declaration it cannot read.
     /// Header parsing still succeeds; materializing this block throws
     /// <see cref="XisfUnsupportedObjectException"/> while sibling blocks stay readable (§7).
     /// </summary>
@@ -462,12 +463,20 @@ public sealed record XisfDataBlockInfo(
 
 // ==================== Configuration ====================
 
+/// <param name="TryDecompressEqualLengthSubblocks">
+/// XISF 1.0 Revision 2 §10.6.1: a compression subblock whose compressed and uncompressed lengths
+/// are equal is stored uncompressed, but encoders predating Revision 2 could write genuinely
+/// compressed subblocks of equal length. When true, such a subblock is first decompressed and the
+/// result used if it yields exactly the declared length; otherwise it is copied unmodified. When
+/// false it is always copied unmodified.
+/// </param>
 public sealed record XisfReaderOptions(
     bool ValidateChecksums = true,
     bool LoadThumbnails = true,
     bool LoadExternalReferences = true,
     Func<string, Stream>? FileStreamProvider = null,
-    Func<Uri, Stream>? UriStreamProvider = null
+    Func<Uri, Stream>? UriStreamProvider = null,
+    bool TryDecompressEqualLengthSubblocks = true
 );
 
 public sealed record XisfWriterOptions(

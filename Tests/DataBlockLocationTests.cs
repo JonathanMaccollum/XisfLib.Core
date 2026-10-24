@@ -8,7 +8,7 @@
 //   Read_EmbeddedImage_HasRealContent                   - location="embedded" never consults the child
 //   Read_EmbeddedImage_HexEncoding_HasRealContent         Data element; the Data path is only reached
 //   Read_EmbeddedImage_CompressionOnDataElement           when no location attribute exists, and it
-//                                                         always decodes as base64 (§10.3, §10.6.1).
+//                                                         always decodes as base64 (§10.3, §10.6).
 //   Read_UrlLocation_ExtendsToLastParenthesis           - Rev 1 correction D.7; today the parse stops
 //                                                         at the FIRST ')'.
 //   Read_UnknownCodec_HeaderParseSucceedsAndSiblingBlockReadable - contract 10: an unknown codec throws
@@ -119,7 +119,7 @@ public sealed class DataBlockLocationTests
     {
         var payload = Pattern(64);
         var compressed = Convert.ToBase64String(DeflateZlib(payload));
-        // §10.6.1: for an embedded block the compression attribute belongs to the child Data element.
+        // §10.6: for an embedded block the compression attribute belongs to the child Data element.
         var file = TestKit.BuildMonolithic(Document(
             $"<Image geometry=\"{payload.Length}:1:1\" sampleFormat=\"UInt8\" colorSpace=\"Gray\" location=\"embedded\">" +
             $"<Data compression=\"zlib:{payload.Length}\" encoding=\"base64\">{compressed}</Data></Image>"));

@@ -6,7 +6,16 @@ A .NET library for reading and writing XISF (Extensible Image Serialization Form
 
 XISF is a free, open file format developed by Pleiades Astrophoto for PixInsight. It enables storage, management, and interchange of digital images along with associated metadata and data structures.
 
-This library implements the [XISF 1.0 Specification](https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html), including Revision 1 (September 2026).
+This library implements the [XISF 1.0 Specification](https://pixinsight.com/doc/docs/XISF-1.0-spec/XISF-1.0-spec.html), including Revisions 1 (September 2026) and 2 (October 2026).
+
+### What's new in 1.4
+
+Revision 2 conformance: compression subblocks whose compressed and uncompressed lengths are equal
+are read as uncompressed data (the form PixInsight writes for incompressible pixels), with a
+default-on legacy probe for older files that compressed such subblocks anyway. Every compressed
+subblock must now decompress to exactly its declared length, and the writer never stores data that
+compression made larger: a block that does not shrink is written uncompressed, without a
+`compression` attribute. Details and upgrade notes: [CHANGELOG](https://github.com/JonathanMaccollum/XisfLib.Core/blob/main/CHANGELOG.md).
 
 ### What's new in 1.3
 
@@ -27,7 +36,7 @@ If you're processing astrophotography data, PixInsight is the tool to use.
 - **Multiple storage models**: Monolithic (single file) and distributed formats
 - **Flexible image support**: Arbitrary dimensionality (1D, 2D, 3D+), multiple channels
 - **Color spaces**: Grayscale, RGB, CIE L*a*b*, ICC profiles
-- **Data compression**: zlib, LZ4, LZ4HC with optional byte shuffling, ZStd, ZStdSH
+- **Data compression**: zlib, LZ4, LZ4HC with optional byte shuffling, ZStd, ZStdSH, including compression subblocks and uncompressed subblocks
 - **Rich metadata**: FITS header compatibility, custom properties
 - **Data types**: 8/16/32/64-bit integers, IEEE 754 floats (32/64-bit)
 

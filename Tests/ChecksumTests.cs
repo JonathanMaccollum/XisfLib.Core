@@ -5,7 +5,7 @@
 //                                                                    leaves Checksum null, so the
 //                                                                    CalculateChecksums option is dead.
 //   Write_Checksum_IsLowercaseHexDigestOfStoredBytes               - contract 9 / §10.5 digest form.
-//   Write_Checksum_OfCompressedBlock_CoversStoredBytesNotPixels    - contract 9 / §10.6.1.
+//   Write_Checksum_OfCompressedBlock_CoversStoredBytesNotPixels    - contract 9 / §10.6.2.
 //   Write_ChecksumAlgorithmNames_AreHyphenated                     - contract 9 / §10.5 Table 9.
 //   Write_ThenReadMetadata_BlockInfoCarriesChecksum                - contract 9, read-back of the above.
 //   Read_Sha3Checksum_MaterializingBlockThrowsUnsupportedObject    - contract 10: today the uncomputable
@@ -16,7 +16,7 @@
 //   Write_WithoutCalculateChecksums_EmitsNoChecksumAttribute
 //   Read_ValidChecksum_MaterializesBlock                           - digest over the STORED bytes.
 //   Read_CorruptedStoredBytes_ThrowsInvalidDataException
-//   Read_CompressedBlock_BadChecksum_FailsBeforeDecompression      - §10.6.1 security rule; already
+//   Read_CompressedBlock_BadChecksum_FailsBeforeDecompression      - §10.6.2 security rule; already
 //                                                                    verify-then-decompress.
 //   Read_CompressedBlock_GoodChecksumOverInvalidZlib_FailsInDecompression - control proving the
 //                                                                    previous test discriminates.
@@ -86,7 +86,7 @@ public sealed class ChecksumTests
         Assert.NotNull(checksum);
 
         var stored = Attachment(file);
-        // §10.6.1: for a compressed block the digest is computed for the compressed data, never the original.
+        // §10.6.2: for a compressed block the digest is computed for the compressed data, never the original.
         Assert.NotEqual(pixels.Length, stored.Length);
         Assert.Equal(Hex(SHA1.HashData(stored)), checksum!.Value.Split(':')[1]);
         Assert.NotEqual(Hex(SHA1.HashData(pixels)), checksum.Value.Split(':')[1]);
@@ -188,12 +188,12 @@ public sealed class ChecksumTests
     public async Task Read_CompressedBlock_BadChecksum_FailsBeforeDecompression()
     {
         // Stored bytes are not a valid zlib stream, so any attempt to decompress raises a decompression
-        // failure. §10.6.1 forbids decompressing a block whose checksum failed, so the surfaced failure
+        // failure. §10.6.2 forbids decompressing a block whose checksum failed, so the surfaced failure
         // must be the checksum failure instead.
         var stored = Enumerable.Repeat((byte)0xFF, 16).ToArray();
         var file = TestKit.BuildMonolithic(
-            Document(Gray8Element(16, stored.Length,
-                "compression=\"zlib:16\"",
+            Document(Gray8Element(32, stored.Length,
+                "compression=\"zlib:32\"",
                 $"checksum=\"sha-1:{Hex(SHA1.HashData(Pattern(8)))}\"")),
             stored);
 
@@ -207,14 +207,49 @@ public sealed class ChecksumTests
     {
         var stored = Enumerable.Repeat((byte)0xFF, 16).ToArray();
         var file = TestKit.BuildMonolithic(
-            Document(Gray8Element(16, stored.Length,
-                "compression=\"zlib:16\"",
+            Document(Gray8Element(32, stored.Length,
+                "compression=\"zlib:32\"",
                 $"checksum=\"sha-1:{Hex(SHA1.HashData(stored))}\"")),
             stored);
 
         var error = await Assert.ThrowsAnyAsync<Exception>(() => TestKit.ReadBytes(file));
 
         Assert.DoesNotContain("checksum", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Read_EqualLengthSubblock_BadChecksum_FailsBeforeProbe()
+    {
+        // A legacy compressed block of equal lengths would be decompressed by the probe and a raw
+        // one copied; either way a checksum mismatch must surface first (§10.6.2).
+        var (stream, compressed) = CodecKit.EqualLengthCompressed(XisfCompressionCodec.Zlib);
+        var file = TestKit.BuildMonolithic(
+            Document(Gray8Element(stream.Length, compressed.Length,
+                $"compression=\"zlib:{stream.Length}\"",
+                $"checksum=\"sha-1:{Hex(SHA1.HashData(stream))}\"")),
+            compressed);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => TestKit.ReadBytes(file));
+
+        Assert.Contains("checksum", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Write_Checksum_OfBlockWithRawSubblock_CoversStoredBytes()
+    {
+        const int half = 1024;
+        var pixels = CodecKit.Ramp(half).Concat(CodecKit.Noise(half)).ToArray();
+        var requested = new XisfCompression(XisfCompressionCodec.Zlib, 0, null,
+            new[] { new XisfCompressionSubblock(0, half), new XisfCompressionSubblock(0, half) });
+        var file = await WriteBytes(Unit(CodecKit.Gray16(pixels, requested)),
+            new XisfWriterOptions(CalculateChecksums: true));
+
+        var stored = Attachment(file);
+        Assert.Equal(pixels[half..], stored[^half..]);
+        Assert.Equal(Hex(SHA1.HashData(stored)), ImageElement(file).Attribute("checksum")!.Value.Split(':')[1]);
+
+        var unit = await TestKit.ReadBytes(file);
+        Assert.Equal(pixels, Pixels(unit.Images[0]));
     }
 
     [Fact]

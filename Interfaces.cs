@@ -105,23 +105,13 @@ namespace XisfLib.Core
 
         /// <summary>
         /// Produces the stored bytes of a data block: byte shuffling (when the codec asks for it)
-        /// followed by compression of the whole block or of each declared subblock.
+        /// followed by compression of the whole block or of each declared subblock. A null
+        /// compression in the result means nothing shrank and the original data is stored as is.
         /// Specification Reference: Section 10.6
         /// </summary>
         (ReadOnlyMemory<byte> Stored, XisfCompression? Compression) CompressBlock(
             ReadOnlyMemory<byte> data,
             XisfCompression? compression);
-
-        /// <summary>
-        /// Writes a data block to a stream asynchronously.
-        /// Handles compression, checksum generation, and byte order conversion.
-        /// </summary>
-        Task WriteDataBlockAsync(
-            XisfDataBlock block,
-            ReadOnlyMemory<byte> data,
-            Stream target,
-            XisfWriterOptions options,
-            CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Encodes binary data to Base64 or Hex encoding.
@@ -164,21 +154,25 @@ namespace XisfLib.Core
         /// <summary>
         /// Compresses data with a single codec. Byte shuffling is applied to the whole block by
         /// <see cref="IDataBlockProcessor.CompressBlock"/> before this is called, never here.
-        /// Specification Reference: Sections 10.6.3-10.6.9
+        /// Specification Reference: Sections 10.6.4-10.6.11
         /// </summary>
         ReadOnlyMemory<byte> Compress(ReadOnlyMemory<byte> data, XisfCompressionCodec codec);
 
         /// <summary>
-        /// Decompresses data produced by <see cref="Compress"/>; unshuffling is the caller's job.
+        /// Decompresses into <paramref name="destination"/>, returning true only when the codec
+        /// reports no error, produces exactly <c>destination.Length</c> bytes and, where the codec
+        /// can tell, consumes all of <paramref name="compressed"/>. Malformed input is a false
+        /// result, never an exception; the destination content is unspecified after a false
+        /// result. Unshuffling is the caller's job.
         /// </summary>
-        ReadOnlyMemory<byte> Decompress(
+        bool TryDecompress(
             ReadOnlyMemory<byte> compressed,
             XisfCompressionCodec codec,
-            ulong uncompressedSize);
+            Span<byte> destination);
 
         /// <summary>
         /// Applies byte shuffling transformation for improved compression.
-        /// Specification Reference: Section 10.6.2 Byte Shuffling
+        /// Specification Reference: Section 10.6.3 Byte Shuffling
         /// </summary>
         ReadOnlyMemory<byte> ApplyByteShuffle(ReadOnlyMemory<byte> data, uint itemSize);
 

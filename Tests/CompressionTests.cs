@@ -2,7 +2,7 @@
 //
 // EXPECTED-RED
 //   Emit_NonShuffledCodec_CompressionAttributeOmitsItemSize      - grammar gap: FormatCompression emits
-//                                                                  ":itemSize" for every codec; §10.6.3
+//                                                                  ":itemSize" for every codec; §10.6.4
 //                                                                  grammar is "zlib:uncompressed-size".
 //   Parse_SubblocksAttribute_PopulatesCompressionSubblocks       - contract 11 / assessment §A.6: the
 //                                                                  subblocks attribute is never parsed.
@@ -12,15 +12,15 @@
 // EXPECTED-GREEN (must not regress)
 //   RoundTrip_EveryCodec_PreservesPixelData                      - all eight codecs already wired.
 //   RoundTrip_ShuffledCodecs_EveryItemSize_PreservesPixelData
-//   Write_ShuffledCodec_StoredBytesMatchSpecShuffleLayout        - §10.6.2 shuffle layout, known pattern.
+//   Write_ShuffledCodec_StoredBytesMatchSpecShuffleLayout        - §10.6.3 shuffle layout, known pattern.
 //   Read_ShuffledBlock_LengthMultipleOfItemSize_RecoversPayload
 //   Read_ShuffledBlock_WithTail_LeavesTrailingBytesUnshuffled    - contract 14 is verify-only; the
 //                                                                  tail branch already looks correct.
 //   Emit_ShuffledCodec_CompressionAttributeCarriesItemSize
 //   Parse_CompressionAttribute_WithoutItemSize_Reads
 //   Write_SingleSubblock_EmitsNoSubblocksAttribute
-//   Zstd_StoredBytes_AreZstandardFrame                           - §10.6.9 frame format.
-//   Lz4_StoredBytes_AreBlockFormat_NotFrameFormat                - §10.6.5 block format, no frame magic.
+//   Zstd_StoredBytes_AreZstandardFrame                           - §10.6.10 frame format.
+//   Lz4_StoredBytes_AreBlockFormat_NotFrameFormat                - §10.6.6 block format, no frame magic.
 
 using System;
 using System.IO;
@@ -48,10 +48,12 @@ public sealed class CompressionTests
     [InlineData(XisfCompressionCodec.ZstdSh)]
     public async Task RoundTrip_EveryCodec_PreservesPixelData(XisfCompressionCodec codec)
     {
-        var pixels = Pattern(512);
-        var unit = Unit(GrayImage(XisfSampleFormat.UInt16, pixels));
+        var pixels = CodecKit.Ramp(512);
+        var file = await WriteBytes(Unit(GrayImage(XisfSampleFormat.UInt16, pixels)),
+            new XisfWriterOptions(DefaultCompression: codec));
+        Assert.NotNull(ImageElement(file).Attribute("compression"));
 
-        var read = await TestKit.RoundTrip(unit, new XisfWriterOptions(DefaultCompression: codec));
+        var read = await TestKit.ReadBytes(file);
 
         Assert.Equal(pixels, Pixels(read.Images[0]));
     }
@@ -72,10 +74,12 @@ public sealed class CompressionTests
     public async Task RoundTrip_ShuffledCodecs_EveryItemSize_PreservesPixelData(
         XisfCompressionCodec codec, XisfSampleFormat format)
     {
-        var pixels = Pattern(ItemSize(format) * 64);
-        var unit = Unit(GrayImage(format, pixels));
+        var pixels = CodecKit.Ramp(ItemSize(format) * 64);
+        var file = await WriteBytes(Unit(GrayImage(format, pixels)),
+            new XisfWriterOptions(DefaultCompression: codec));
+        Assert.NotNull(ImageElement(file).Attribute("compression"));
 
-        var read = await TestKit.RoundTrip(unit, new XisfWriterOptions(DefaultCompression: codec));
+        var read = await TestKit.ReadBytes(file);
 
         Assert.Equal(pixels, Pixels(read.Images[0]));
     }
@@ -87,7 +91,7 @@ public sealed class CompressionTests
     public async Task Write_ShuffledCodec_StoredBytesMatchSpecShuffleLayout(
         XisfSampleFormat format, int itemSize)
     {
-        var pixels = Sequential(itemSize * 8);
+        var pixels = CodecKit.Ramp(itemSize * 64);
         var file = await WriteBytes(Unit(GrayImage(format, pixels)),
             new XisfWriterOptions(DefaultCompression: XisfCompressionCodec.ZlibSh));
 
@@ -121,7 +125,7 @@ public sealed class CompressionTests
         var shuffled = Shuffle(payload, itemSize);
         var tail = length % itemSize;
 
-        // §10.6.2: bytes not forming a complete item are stored unaltered AFTER the shuffled run.
+        // §10.6.3: bytes not forming a complete item are stored unaltered AFTER the shuffled run.
         Assert.NotEqual(0, tail);
         Assert.Equal(payload.Skip(length - tail).ToArray(), shuffled.Skip(length - tail).ToArray());
 
@@ -138,7 +142,7 @@ public sealed class CompressionTests
     public async Task Emit_ShuffledCodec_CompressionAttributeCarriesItemSize(
         XisfCompressionCodec codec, string codecName)
     {
-        var pixels = Pattern(128);
+        var pixels = CodecKit.Ramp(512);
         var file = await WriteBytes(Unit(GrayImage(XisfSampleFormat.UInt16, pixels)),
             new XisfWriterOptions(DefaultCompression: codec));
 
@@ -158,13 +162,13 @@ public sealed class CompressionTests
     public async Task Emit_NonShuffledCodec_CompressionAttributeOmitsItemSize(
         XisfCompressionCodec codec, string codecName)
     {
-        var pixels = Pattern(128);
+        var pixels = CodecKit.Ramp(512);
         var file = await WriteBytes(Unit(GrayImage(XisfSampleFormat.UInt16, pixels)),
             new XisfWriterOptions(DefaultCompression: codec));
 
         var parts = CompressionAttribute(file).Split(':');
 
-        // §10.6.3/10.6.5/10.6.7/10.6.9: the item-size component exists only for the "+sh" codecs.
+        // §10.6.4/10.6.6/10.6.8/10.6.10: the item-size component exists only for the "+sh" codecs.
         Assert.Equal(2, parts.Length);
         Assert.Equal(codecName, parts[0]);
         Assert.Equal(pixels.Length.ToString(), parts[1]);
@@ -187,7 +191,7 @@ public sealed class CompressionTests
     [Fact]
     public async Task Write_SingleSubblock_EmitsNoSubblocksAttribute()
     {
-        var file = await WriteBytes(Unit(GrayImage(XisfSampleFormat.UInt16, Pattern(128))),
+        var file = await WriteBytes(Unit(GrayImage(XisfSampleFormat.UInt16, CodecKit.Ramp(512))),
             new XisfWriterOptions(DefaultCompression: XisfCompressionCodec.Zstd));
 
         Assert.Null(ImageElement(file).Attribute("subblocks"));
@@ -245,13 +249,13 @@ public sealed class CompressionTests
     [Fact]
     public async Task Zstd_StoredBytes_AreZstandardFrame()
     {
-        var pixels = Pattern(256);
+        var pixels = CodecKit.Ramp(1024);
         var file = await WriteBytes(Unit(GrayImage(XisfSampleFormat.UInt16, pixels)),
             new XisfWriterOptions(DefaultCompression: XisfCompressionCodec.Zstd));
 
         var stored = Attachment(file);
 
-        // §10.6.9: Zstandard frame format. Magic number 0xFD2FB528, little-endian on the wire.
+        // §10.6.10: Zstandard frame format. Magic number 0xFD2FB528, little-endian on the wire.
         Assert.Equal(new byte[] { 0x28, 0xB5, 0x2F, 0xFD }, stored.Take(4).ToArray());
 
         var decoded = new byte[pixels.Length];
@@ -265,13 +269,13 @@ public sealed class CompressionTests
     [InlineData(XisfCompressionCodec.LZ4HC)]
     public async Task Lz4_StoredBytes_AreBlockFormat_NotFrameFormat(XisfCompressionCodec codec)
     {
-        var pixels = Pattern(256);
+        var pixels = CodecKit.Ramp(1024);
         var file = await WriteBytes(Unit(GrayImage(XisfSampleFormat.UInt16, pixels)),
             new XisfWriterOptions(DefaultCompression: codec));
 
         var stored = Attachment(file);
 
-        // §10.6.5: LZ4 block format, without the LZ4 frame headers (frame magic 0x184D2204).
+        // §10.6.6: LZ4 block format, without the LZ4 frame headers (frame magic 0x184D2204).
         Assert.NotEqual(new byte[] { 0x04, 0x22, 0x4D, 0x18 }, stored.Take(4).ToArray());
 
         var decoded = new byte[pixels.Length];
@@ -304,7 +308,7 @@ public sealed class CompressionTests
 
     // A UInt16 image: the declared compression item size is a property of the block, not of the sample
     // format, but keeping the payload 16-bit avoids declaring a shuffle over an 8-bit image, which
-    // §10.6.2 calls a no-op.
+    // §10.6.3 calls a no-op.
     private static string ImageElementXml(int byteLength, int storedSize, params string[] extraAttributes)
         => $"<Image geometry=\"{byteLength / 2}:1:1\" sampleFormat=\"UInt16\" colorSpace=\"Gray\" " +
            $"location=\"attachment:{BlockBase}:{storedSize}\" {string.Join(" ", extraAttributes)} />";

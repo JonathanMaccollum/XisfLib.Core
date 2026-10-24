@@ -45,10 +45,10 @@ namespace XisfLib.Core.Implementations
             };
         }
 
-        public ReadOnlyMemory<byte> Decompress(
+        public bool TryDecompress(
             ReadOnlyMemory<byte> compressed,
             XisfCompressionCodec codec,
-            ulong uncompressedSize)
+            Span<byte> destination)
         {
             if (!SupportsCodec(codec))
             {
@@ -57,10 +57,11 @@ namespace XisfLib.Core.Implementations
 
             return codec switch
             {
-                XisfCompressionCodec.Zlib or XisfCompressionCodec.ZlibSh => DecompressZlib(compressed, uncompressedSize),
-                XisfCompressionCodec.LZ4 or XisfCompressionCodec.LZ4Sh => DecompressLZ4(compressed, uncompressedSize),
-                XisfCompressionCodec.LZ4HC or XisfCompressionCodec.LZ4HCSh => DecompressLZ4(compressed, uncompressedSize),
-                XisfCompressionCodec.Zstd or XisfCompressionCodec.ZstdSh => DecompressZStd(compressed, uncompressedSize),
+                XisfCompressionCodec.Zlib or XisfCompressionCodec.ZlibSh => TryDecompressZlib(compressed, destination),
+                XisfCompressionCodec.LZ4 or XisfCompressionCodec.LZ4Sh or
+                XisfCompressionCodec.LZ4HC or XisfCompressionCodec.LZ4HCSh =>
+                    K4os.Compression.LZ4.LZ4Codec.Decode(compressed.Span, destination) == destination.Length,
+                XisfCompressionCodec.Zstd or XisfCompressionCodec.ZstdSh => TryDecompressZStd(compressed, destination),
                 _ => throw new NotSupportedException($"Unsupported codec: {codec}")
             };
         }
@@ -76,27 +77,40 @@ namespace XisfLib.Core.Implementations
             return outputStream.ToArray();
         }
 
-        private ReadOnlyMemory<byte> DecompressZlib(ReadOnlyMemory<byte> compressed, ulong uncompressedSize)
+        /// <summary>
+        /// The trailing one-byte read rejects output longer than the destination, and an Adler-32
+        /// trailer that is present is verified. A stream ending without its trailer, or followed by
+        /// trailing bytes, is still accepted: ZLibStream reports neither.
+        /// </summary>
+        private static bool TryDecompressZlib(ReadOnlyMemory<byte> compressed, Span<byte> destination)
         {
-            using var inputStream = new MemoryStream(compressed.ToArray());
-            using var zlibStream = new System.IO.Compression.ZLibStream(inputStream, System.IO.Compression.CompressionMode.Decompress);
+            var inputStream = System.Runtime.InteropServices.MemoryMarshal.TryGetArray(compressed, out var segment)
+                ? new MemoryStream(segment.Array!, segment.Offset, segment.Count, writable: false)
+                : new MemoryStream(compressed.ToArray(), writable: false);
 
-            var output = new byte[uncompressedSize];
-            int totalRead = 0;
-            int bytesRead;
-
-            while (totalRead < (int)uncompressedSize &&
-                   (bytesRead = zlibStream.Read(output, totalRead, (int)uncompressedSize - totalRead)) > 0)
+            try
             {
-                totalRead += bytesRead;
-            }
+                using (inputStream)
+                using (var zlibStream = new System.IO.Compression.ZLibStream(inputStream, System.IO.Compression.CompressionMode.Decompress))
+                {
+                    var totalRead = 0;
+                    int bytesRead;
+                    while (totalRead < destination.Length &&
+                           (bytesRead = zlibStream.Read(destination[totalRead..])) > 0)
+                    {
+                        totalRead += bytesRead;
+                    }
 
-            if (totalRead != (int)uncompressedSize)
+                    Span<byte> excess = stackalloc byte[1];
+                    return totalRead == destination.Length && zlibStream.Read(excess) == 0;
+                }
+            }
+            // Inflate errors other than Z_DATA_ERROR (Z_NEED_DICT among them) surface as the internal
+            // ZLibException, an IOException. The source is in memory, so no other IOException arises.
+            catch (Exception e) when (e is InvalidDataException or IOException)
             {
-                throw new InvalidDataException($"Decompressed size mismatch: expected {uncompressedSize}, got {totalRead}");
+                return false;
             }
-
-            return output;
         }
 
         private ReadOnlyMemory<byte> CompressLZ4(ReadOnlyMemory<byte> data)
@@ -123,23 +137,6 @@ namespace XisfLib.Core.Implementations
             return target.AsMemory(0, encodedLength);
         }
 
-        private ReadOnlyMemory<byte> DecompressLZ4(ReadOnlyMemory<byte> compressed, ulong uncompressedSize)
-        {
-            var source = compressed.ToArray();
-            var target = new byte[uncompressedSize];
-
-            var decodedLength = K4os.Compression.LZ4.LZ4Codec.Decode(
-                source, 0, source.Length,
-                target, 0, target.Length);
-
-            if (decodedLength != (int)uncompressedSize)
-            {
-                throw new InvalidDataException($"Decompressed size mismatch: expected {uncompressedSize}, got {decodedLength}");
-            }
-
-            return target;
-        }
-
         private ReadOnlyMemory<byte> CompressZStd(ReadOnlyMemory<byte> data)
         {
             var source = data.ToArray();
@@ -148,18 +145,17 @@ namespace XisfLib.Core.Implementations
             return compressed.ToArray();
         }
 
-        private ReadOnlyMemory<byte> DecompressZStd(ReadOnlyMemory<byte> compressed, ulong uncompressedSize)
+        private static bool TryDecompressZStd(ReadOnlyMemory<byte> compressed, Span<byte> destination)
         {
-            var source = compressed.ToArray();
-            using var decompressor = new Decompressor();
-            var decompressed = decompressor.Unwrap(source);
-
-            if ((ulong)decompressed.Length != uncompressedSize)
+            try
             {
-                throw new InvalidDataException($"Decompressed size mismatch: expected {uncompressedSize}, got {decompressed.Length}");
+                using var decompressor = new Decompressor();
+                return decompressor.Unwrap(compressed.Span, destination) == destination.Length;
             }
-
-            return decompressed.ToArray();
+            catch (ZstdException)
+            {
+                return false;
+            }
         }
 
         public ReadOnlyMemory<byte> ApplyByteShuffle(ReadOnlyMemory<byte> data, uint itemSize)
@@ -171,7 +167,6 @@ namespace XisfLib.Core.Implementations
             var output = new byte[input.Length];
             var numberOfItems = (uint)(input.Length / itemSize);
 
-            // Apply byte shuffling per specification Section 10.6.2
             int outputIndex = 0;
             for (uint j = 0; j < itemSize; j++)
             {

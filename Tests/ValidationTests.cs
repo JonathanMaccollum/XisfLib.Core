@@ -64,7 +64,7 @@ public sealed class ValidationTests
     public void ImagesWithoutIds_AreAccepted()
         => Assert.True(Validate(TestKit.Unit(TestKit.Gray8(4, 4, 1), TestKit.Gray8(4, 4, 2))));
 
-    // ==================== Byte-shuffling codecs need an item size (§10.6.2) ====================
+    // ==================== Byte-shuffling codecs need an item size (§10.6.3) ====================
 
     [Theory]
     [InlineData(XisfCompressionCodec.ZlibSh)]

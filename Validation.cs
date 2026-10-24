@@ -156,7 +156,7 @@ namespace XisfLib.Core.Implementations
                 warnings.Add("RGB color space typically requires at least 3 channels");
             }
 
-            // §10.6.2: a byte-shuffling codec cannot be applied without an item size.
+            // §10.6.3: a byte-shuffling codec cannot be applied without an item size.
             var compression = image.PixelData?.Compression;
             if (compression != null && !compression.ItemSize.HasValue && IsShuffledCodec(compression.Codec))
             {

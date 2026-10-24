@@ -111,7 +111,9 @@ namespace XisfLib.Core.Implementations
                 }
             }
 
-            var data = block.Compression != null ? DecompressBlock(stored, block.Compression) : stored;
+            var data = block.Compression != null
+                ? DecompressBlock(stored, block.Compression, options.TryDecompressEqualLengthSubblocks)
+                : stored;
 
             if (block.ByteOrder != XisfByteOrder.LittleEndian)
             {
@@ -125,36 +127,68 @@ namespace XisfLib.Core.Implementations
         {
             if (block.UnsupportedDeclaration != null)
                 throw new XisfUnsupportedObjectException(block.UnsupportedDeclaration);
+
+            if (block.Compression is { } compression && compression.UncompressedSize > (ulong)Array.MaxLength)
+            {
+                throw new NotSupportedException(
+                    $"Data block declares {compression.UncompressedSize} uncompressed bytes; " +
+                    $"blocks larger than {Array.MaxLength} bytes cannot be materialized");
+            }
+
+            if (block is AttachedDataBlock attached && attached.Size > (ulong)Array.MaxLength)
+            {
+                throw new NotSupportedException(
+                    $"Attached data block declares {attached.Size} bytes; " +
+                    $"blocks larger than {Array.MaxLength} bytes cannot be materialized");
+            }
         }
 
-        private ReadOnlyMemory<byte> DecompressBlock(ReadOnlyMemory<byte> stored, XisfCompression compression)
+        /// <summary>
+        /// §10.6.1: a block without a subblocks attribute is one implicit subblock. A subblock with
+        /// equal lengths is stored uncompressed (optionally probed first for legacy compressed data);
+        /// every other subblock must decompress to exactly its declared length. Subblocks land in the
+        /// still-shuffled stream, which is unshuffled once after concatenation.
+        /// </summary>
+        private ReadOnlyMemory<byte> DecompressBlock(
+            ReadOnlyMemory<byte> stored,
+            XisfCompression compression,
+            bool tryDecompressEqualLength)
         {
-            ReadOnlyMemory<byte> data;
+            var subblocks = compression.Subblocks is { Count: > 0 } declared
+                ? declared
+                : new[] { new XisfCompressionSubblock((ulong)stored.Length, compression.UncompressedSize) };
 
-            if (compression.Subblocks is { Count: > 0 })
+            ReconcileSubblocks(subblocks, stored.Length, compression.UncompressedSize);
+
+            var output = new byte[compression.UncompressedSize];
+            var read = 0;
+            var written = 0;
+
+            for (var index = 0; index < subblocks.Count; index++)
             {
-                var output = new byte[compression.UncompressedSize];
-                var read = 0;
-                var written = 0;
+                var source = stored.Slice(read, (int)subblocks[index].CompressedLength);
+                var destination = output.AsSpan(written, (int)subblocks[index].UncompressedLength);
 
-                foreach (var subblock in compression.Subblocks)
+                if (source.Length == destination.Length)
                 {
-                    var piece = _compressionProvider.Decompress(
-                        stored.Slice(read, (int)subblock.CompressedLength),
-                        compression.Codec,
-                        subblock.UncompressedLength);
-
-                    piece.Span.CopyTo(output.AsSpan(written));
-                    read += (int)subblock.CompressedLength;
-                    written += piece.Length;
+                    if (!tryDecompressEqualLength ||
+                        !_compressionProvider.TryDecompress(source, compression.Codec, destination))
+                    {
+                        source.Span.CopyTo(destination);
+                    }
+                }
+                else if (!_compressionProvider.TryDecompress(source, compression.Codec, destination))
+                {
+                    throw new InvalidDataException(
+                        $"Compression subblock {index} ({source.Length} bytes) does not decompress " +
+                        $"to exactly its declared {destination.Length} bytes");
                 }
 
-                data = output;
+                read += source.Length;
+                written += destination.Length;
             }
-            else
-            {
-                data = _compressionProvider.Decompress(stored, compression.Codec, compression.UncompressedSize);
-            }
+
+            ReadOnlyMemory<byte> data = output;
 
             if (IsShuffledCodec(compression.Codec) && compression.ItemSize.HasValue)
             {
@@ -162,6 +196,35 @@ namespace XisfLib.Core.Implementations
             }
 
             return data;
+        }
+
+        private static void ReconcileSubblocks(
+            IReadOnlyList<XisfCompressionSubblock> subblocks,
+            int storedLength,
+            ulong uncompressedSize)
+        {
+            var storedRemaining = (ulong)storedLength;
+            var uncompressedRemaining = uncompressedSize;
+
+            foreach (var subblock in subblocks)
+            {
+                if (subblock.CompressedLength > storedRemaining)
+                    throw new InvalidDataException(
+                        $"Compression subblocks declare more than the {storedLength} stored bytes of the data block");
+                if (subblock.UncompressedLength > uncompressedRemaining)
+                    throw new InvalidDataException(
+                        $"Compression subblocks declare more than the {uncompressedSize} uncompressed bytes of the data block");
+
+                storedRemaining -= subblock.CompressedLength;
+                uncompressedRemaining -= subblock.UncompressedLength;
+            }
+
+            if (storedRemaining != 0)
+                throw new InvalidDataException(
+                    $"Compression subblocks leave {storedRemaining} of the {storedLength} stored bytes of the data block undeclared");
+            if (uncompressedRemaining != 0)
+                throw new InvalidDataException(
+                    $"Compression subblocks leave {uncompressedRemaining} of the {uncompressedSize} uncompressed bytes of the data block undeclared");
         }
 
         public (ReadOnlyMemory<byte> Stored, XisfCompression? Compression) CompressBlock(
@@ -185,17 +248,27 @@ namespace XisfLib.Core.Implementations
                 var pieces = new List<ReadOnlyMemory<byte>>();
                 var subblocks = new List<XisfCompressionSubblock>();
                 var offset = 0;
+                var anyReduced = false;
 
                 foreach (var declared in compression.Subblocks)
                 {
-                    var piece = _compressionProvider.Compress(
-                        payload.Slice(offset, (int)declared.UncompressedLength),
-                        compression.Codec);
+                    var raw = payload.Slice(offset, (int)declared.UncompressedLength);
+                    var piece = _compressionProvider.Compress(raw, compression.Codec);
+
+                    // §10.6.1: a subblock that compression does not shorten is stored uncompressed,
+                    // and its bytes come from the shuffled payload, not the original data.
+                    if (piece.Length < raw.Length)
+                        anyReduced = true;
+                    else
+                        piece = raw;
 
                     pieces.Add(piece);
                     subblocks.Add(new XisfCompressionSubblock((ulong)piece.Length, declared.UncompressedLength));
                     offset += (int)declared.UncompressedLength;
                 }
+
+                if (!anyReduced)
+                    return (data, null);
 
                 var stored = new byte[pieces.Sum(p => p.Length)];
                 var written = 0;
@@ -208,55 +281,10 @@ namespace XisfLib.Core.Implementations
                 return (stored, final with { Subblocks = subblocks });
             }
 
-            return (_compressionProvider.Compress(payload, compression.Codec), final);
-        }
-
-        /// <summary>
-        /// Writes a data block to a stream asynchronously.
-        /// Handles compression, checksum generation, and byte order conversion.
-        /// </summary>
-        public async Task WriteDataBlockAsync(
-            XisfDataBlock block,
-            ReadOnlyMemory<byte> data,
-            Stream target,
-            XisfWriterOptions options,
-            CancellationToken cancellationToken = default)
-        {
-            if (block == null)
-                throw new ArgumentNullException(nameof(block));
-            if (target == null)
-                throw new ArgumentNullException(nameof(target));
-            if (options == null)
-                throw new ArgumentNullException(nameof(options));
-
-            var (processedData, _) = CompressBlock(data, block.Compression);
-
-            // Write based on block type
-            switch (block)
-            {
-                case InlineDataBlock inline:
-                    var encoded = EncodeData(processedData, inline.Encoding);
-                    var bytes = Encoding.UTF8.GetBytes(encoded);
-                    await target.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
-                    break;
-
-                case EmbeddedDataBlock embedded:
-                    encoded = EncodeData(processedData, embedded.Encoding);
-                    bytes = Encoding.UTF8.GetBytes(encoded);
-                    await target.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
-                    break;
-
-                case AttachedDataBlock attached:
-                    await WriteAttachedBlockAsync(attached, processedData, target, cancellationToken);
-                    break;
-
-                case ExternalDataBlock external:
-                    await WriteExternalBlockAsync(external, processedData, cancellationToken);
-                    break;
-
-                default:
-                    throw new NotSupportedException($"Unsupported data block type: {block.GetType().Name}");
-            }
+            // §10.6.1: when nothing shrinks, the block is written without compression, so the
+            // original (unshuffled) data is returned rather than the shuffled payload.
+            var whole = _compressionProvider.Compress(payload, compression.Codec);
+            return whole.Length < payload.Length ? (whole, final) : (data, null);
         }
 
         /// <summary>
@@ -386,19 +414,6 @@ namespace XisfLib.Core.Implementations
             return buffer;
         }
 
-        private async Task WriteAttachedBlockAsync(
-            AttachedDataBlock block,
-            ReadOnlyMemory<byte> data,
-            Stream target,
-            CancellationToken cancellationToken)
-        {
-            // Seek to the block position
-            target.Position = (long)block.Position;
-            
-            // Write the data
-            await target.WriteAsync(data.ToArray(), 0, data.Length, cancellationToken);
-        }
-
         private async Task<ReadOnlyMemory<byte>> ReadExternalBlockAsync(
             ExternalDataBlock block,
             CancellationToken cancellationToken)
@@ -436,32 +451,6 @@ namespace XisfLib.Core.Implementations
                     await stream.CopyToAsync(ms, 81920, cancellationToken);
                     return ms.ToArray();
                 }
-            }
-        }
-
-        private async Task WriteExternalBlockAsync(
-            ExternalDataBlock block,
-            ReadOnlyMemory<byte> data,
-            CancellationToken cancellationToken)
-        {
-            if (block.Location.Scheme != "file")
-            {
-                throw new NotSupportedException("Writing to remote external blocks is not supported");
-            }
-
-            var stream = _streamResolver.ResolveFileStream(
-                block.Location.LocalPath,
-                FileMode.Create,
-                FileAccess.Write);
-
-            using (stream)
-            {
-                if (block.Position.HasValue)
-                {
-                    stream.Position = (long)block.Position.Value;
-                }
-                
-                await stream.WriteAsync(data.ToArray(), 0, data.Length, cancellationToken);
             }
         }
 

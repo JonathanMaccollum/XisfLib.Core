@@ -429,7 +429,7 @@ namespace XisfLib.Core.Implementations
         /// <summary>
         /// Builds the data block an element serializes, taking inline content from the element's own
         /// character data and embedded content from its child Data element, whose encoding and
-        /// compression attributes govern (§10.3, §10.6.1).
+        /// compression attributes govern (§10.3, §10.6).
         /// </summary>
         private XisfDataBlock? ParseDataBlock(XElement element)
         {
@@ -898,7 +898,7 @@ namespace XisfLib.Core.Implementations
                 _ => throw new NotSupportedException($"Unsupported compression codec: {compression.Codec}")
             };
 
-            // §10.6.3/10.6.5/10.6.7/10.6.9: only the "+sh" codecs carry an item-size component.
+            // §10.6.4/10.6.6/10.6.8/10.6.10: only the "+sh" codecs carry an item-size component.
             return IsShuffledCodec(compression.Codec) && compression.ItemSize.HasValue
                 ? $"{codecStr}:{compression.UncompressedSize}:{compression.ItemSize.Value}"
                 : $"{codecStr}:{compression.UncompressedSize}";
@@ -996,14 +996,21 @@ namespace XisfLib.Core.Implementations
             uint? itemSize = null;
             if (parts.Length >= 3 && uint.TryParse(parts[2], out var parsedItemSize))
                 itemSize = parsedItemSize;
+            else if (parts.Length >= 3 && IsShuffledCodec(codec.Value))
+                return (null, $"Data block declares the unreadable item size in compression specification '{compressionStr}'");
 
-            return (new XisfCompression(codec.Value, uncompressedSize, itemSize, ParseSubblocks(subblocksStr)), null);
+            var (subblocks, malformed) = ParseSubblocks(subblocksStr);
+            if (malformed)
+                return (null, $"Data block declares the unreadable subblocks specification '{subblocksStr}'");
+
+            return (new XisfCompression(codec.Value, uncompressedSize, itemSize, subblocks), null);
         }
 
-        private static IReadOnlyList<XisfCompressionSubblock>? ParseSubblocks(string? subblocksStr)
+        private static (IReadOnlyList<XisfCompressionSubblock>? Subblocks, bool Malformed) ParseSubblocks(
+            string? subblocksStr)
         {
-            if (string.IsNullOrWhiteSpace(subblocksStr))
-                return null;
+            if (subblocksStr == null)
+                return (null, false);
 
             var subblocks = new List<XisfCompressionSubblock>();
             foreach (var entry in subblocksStr.Split(':'))
@@ -1013,13 +1020,13 @@ namespace XisfLib.Core.Implementations
                     !ulong.TryParse(pair[0], out var compressed) ||
                     !ulong.TryParse(pair[1], out var uncompressed))
                 {
-                    return null;
+                    return (null, true);
                 }
 
                 subblocks.Add(new XisfCompressionSubblock(compressed, uncompressed));
             }
 
-            return subblocks.Count > 0 ? subblocks : null;
+            return (subblocks, false);
         }
 
         private static (XisfChecksum? Checksum, string? Unsupported) ParseChecksum(string checksumStr)
