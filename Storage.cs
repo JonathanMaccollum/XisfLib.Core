@@ -137,8 +137,9 @@ namespace XisfLib.Core.Implementations
             var imageElements = root.Elements().Where(e => e.Name.LocalName == "Image").ToList();
             var imageMetadataList = new List<XisfImageMetadata>();
 
-            XisfBlockReader blockReader = (block, itemSize) =>
-                _dataBlockProcessor.ReadDataBlock(block, stream, options, itemSize);
+            XisfBlockReader blockReader = (block, itemSize) => IsAvailable(block, stream)
+                ? _dataBlockProcessor.ReadDataBlock(block, stream, options, itemSize)
+                : (ReadOnlyMemory<byte>?)null;
 
             foreach (var imageElement in imageElements)
             {
@@ -218,6 +219,12 @@ namespace XisfLib.Core.Implementations
                 globalProperties
             );
         }
+
+        private static bool IsAvailable(XisfDataBlock block, Stream stream)
+            => block is not AttachedDataBlock attached ||
+               (stream.CanSeek &&
+                attached.Size <= (ulong)stream.Length &&
+                attached.Position <= (ulong)stream.Length - attached.Size);
 
         private XisfFileHeader ParseFileHeader(byte[] headerBytes)
         {

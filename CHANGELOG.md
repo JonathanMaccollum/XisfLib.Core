@@ -60,6 +60,22 @@ tightening, listed first because it is the only change that can turn a working c
 - Property format specifiers remain carried verbatim, not applied. Distributed (`.xish`/`.xisb`)
   writing remains header-only.
 
+### Fixed
+
+- Regression in 1.3: `ReadMetadataFromStream`/`ReadMetadataFromStreamAsync` threw
+  `EndOfStreamException` when given a stream holding only the file header (16 bytes + XML header)
+  and a property stored its value in an attached block past that point. WBPP 3.1 / PixInsight 1.9.5
+  masters store `PixInsight:ProcessingHistory` this way. Metadata reads now resolve an attached
+  property block only when it lies within the stream (seekable, and `position + size <= Length`).
+  Otherwise the property keeps its Id and comes back as a placeholder (an empty
+  `XisfStringProperty` value, or an empty vector/matrix) whose new `XisfProperty.UnresolvedBlock`
+  (init-only, `null` when resolved) holds the declared `AttachedDataBlock`: position, size,
+  compression, checksum and byte order. Unresolved blocks are never read, so their checksums are
+  not validated. Blocks inside the stream resolve as before, and `ReadAsync` is unchanged.
+- Writing a unit that contains an unresolved property throws `InvalidOperationException` naming
+  the property Id, so a metadata-only read can never be written back with its values blanked. A
+  `with` expression carries the mark; set `UnresolvedBlock = null` when supplying the value.
+
 ## 1.2
 
 Switched to automated CI versioning and publishing: every push to main publishes

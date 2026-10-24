@@ -117,7 +117,16 @@ public sealed record XisfKeyInfo(
 
 // ==================== Abstract Base Types ====================
 
-public abstract record XisfProperty(string Id, string? Comment = null, XisfPropertyFormat? Format = null);
+public abstract record XisfProperty(string Id, string? Comment = null, XisfPropertyFormat? Format = null)
+{
+    /// <summary>
+    /// Set when a metadata-only read found this property's value in an attached block beyond what
+    /// the supplied stream holds. The value is then a placeholder (empty string, vector or matrix),
+    /// and writing the property throws rather than emit the placeholder as data. A <c>with</c>
+    /// expression carries the mark, so set <c>UnresolvedBlock = null</c> when supplying the value.
+    /// </summary>
+    public AttachedDataBlock? UnresolvedBlock { get; init; }
+}
 
 public abstract record XisfDataBlock(
     XisfByteOrder ByteOrder = XisfByteOrder.LittleEndian,

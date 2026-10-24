@@ -9,9 +9,10 @@ namespace XisfLib.Core
 {
     /// <summary>
     /// Materializes the value of a data block referenced by a header element, applying checksum
-    /// verification, decompression, unshuffling and byte-order conversion.
+    /// verification, decompression, unshuffling and byte-order conversion. Returns null when the
+    /// block lies outside what the source can provide.
     /// </summary>
-    internal delegate ReadOnlyMemory<byte> XisfBlockReader(XisfDataBlock block, int itemSize);
+    internal delegate ReadOnlyMemory<byte>? XisfBlockReader(XisfDataBlock block, int itemSize);
 
     /// <summary>
     /// Provides XML serialization and deserialization for XISF headers and elements.

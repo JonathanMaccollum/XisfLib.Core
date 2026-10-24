@@ -320,7 +320,10 @@ namespace XisfLib.Core.Implementations
             switch (info.Kind)
             {
                 case PropertyKind.String:
-                    return new XisfStringProperty(id, ReadStringValue(element, blockReader), comment);
+                    var (text, unresolvedText) = ReadStringValue(element, blockReader);
+                    return unresolvedText is null
+                        ? new XisfStringProperty(id, text, comment)
+                        : new XisfStringProperty(id, text, comment) { UnresolvedBlock = unresolvedText };
 
                 case PropertyKind.TimePoint:
                     var timeText = ScalarText(element);
@@ -329,14 +332,14 @@ namespace XisfLib.Core.Implementations
                     return new XisfTimePointProperty(id, DateTimeOffset.Parse(timeText, Invariant), comment);
 
                 case PropertyKind.Vector:
-                    return CreateVector(id, comment, info.ClrType,
-                        ReadBlockValue(element, info.ItemSize, blockReader).Span);
+                    var (vector, unresolvedVector) = ReadBlockValue(element, info.ItemSize, blockReader);
+                    return Mark(CreateVector(id, comment, info.ClrType, vector.Span), unresolvedVector);
 
                 case PropertyKind.Matrix:
                     var rows = ParseDimension(element.Attribute("rows")?.Value);
                     var columns = ParseDimension(element.Attribute("columns")?.Value);
-                    return CreateMatrix(id, comment, info.ClrType, rows, columns,
-                        ReadBlockValue(element, info.ItemSize, blockReader).Span);
+                    var (matrix, unresolvedMatrix) = ReadBlockValue(element, info.ItemSize, blockReader);
+                    return Mark(CreateMatrix(id, comment, info.ClrType, rows, columns, matrix.Span), unresolvedMatrix);
 
                 default:
                     return CreateScalar(id, comment, info.ClrType, ScalarText(element));
@@ -504,38 +507,46 @@ namespace XisfLib.Core.Implementations
         private static XisfEncoding ParseEncoding(string? encoding)
             => string.Equals(encoding, "hex", StringComparison.OrdinalIgnoreCase) ? XisfEncoding.Hex : XisfEncoding.Base64;
 
-        private ReadOnlyMemory<byte> ReadBlockValue(XElement element, int itemSize, XisfBlockReader? blockReader)
+        private static XisfProperty Mark(XisfProperty property, AttachedDataBlock? unresolved)
+            => unresolved is null ? property : property with { UnresolvedBlock = unresolved };
+
+        private (ReadOnlyMemory<byte> Data, AttachedDataBlock? Unresolved) ReadBlockValue(
+            XElement element, int itemSize, XisfBlockReader? blockReader)
         {
             var block = ParseDataBlock(element);
             if (block == null)
-                return ReadOnlyMemory<byte>.Empty;
+                return (ReadOnlyMemory<byte>.Empty, null);
 
             if (blockReader != null)
-                return blockReader(block, itemSize);
+            {
+                return blockReader(block, itemSize) is { } data
+                    ? (data, null)
+                    : (ReadOnlyMemory<byte>.Empty, (AttachedDataBlock)block);
+            }
 
             return block switch
             {
-                InlineDataBlock inline => inline.Data,
-                EmbeddedDataBlock embedded => embedded.Data,
-                _ => ReadOnlyMemory<byte>.Empty
+                InlineDataBlock inline => (inline.Data, null),
+                EmbeddedDataBlock embedded => (embedded.Data, null),
+                _ => (ReadOnlyMemory<byte>.Empty, null)
             };
         }
 
         /// <summary>§11.1.6: a String property carries its value as character data, whose white space
         /// is significant; the value attribute form is legacy but still accepted.</summary>
-        private string ReadStringValue(XElement element, XisfBlockReader? blockReader)
+        private (string Value, AttachedDataBlock? Unresolved) ReadStringValue(XElement element, XisfBlockReader? blockReader)
         {
             var attribute = element.Attribute("value");
             if (attribute != null)
-                return attribute.Value;
+                return (attribute.Value, null);
 
             if (element.Attribute("location") != null)
             {
-                var bytes = ReadBlockValue(element, 1, blockReader);
-                return Encoding.UTF8.GetString(bytes.Span);
+                var (bytes, unresolved) = ReadBlockValue(element, 1, blockReader);
+                return (Encoding.UTF8.GetString(bytes.Span), unresolved);
             }
 
-            return element.Value;
+            return (element.Value, null);
         }
 
         private static string ScalarText(XElement element)
@@ -655,6 +666,13 @@ namespace XisfLib.Core.Implementations
 
         public XElement SerializeProperty(XisfProperty property, XisfWriterOptions options)
         {
+            if (property.UnresolvedBlock is { } unresolved)
+                throw new InvalidOperationException(
+                    $"Property '{property.Id}' was read metadata-only and its value block " +
+                    $"(attachment:{unresolved.Position}:{unresolved.Size}) was never loaded; " +
+                    "writing it would replace the value with an empty placeholder. Read the full file before writing, " +
+                    "or supply the value and set UnresolvedBlock = null.");
+
             if (property is XisfRawProperty raw)
                 return new XElement(raw.Element);
 
