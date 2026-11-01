@@ -383,7 +383,7 @@ namespace XisfLib.Core.Implementations
             _stream.Position = 0;
             
             var buffer = new byte[16]; // 8 bytes signature + 8 bytes reserved
-            await _stream.ReadAsync(buffer, 0, 16, cancellationToken);
+            await _stream.ReadExactlyAsync(buffer, 0, 16, cancellationToken);
             
             var signature = new ReadOnlyMemory<byte>(buffer, 0, 8);
             var reserved = BitConverter.ToUInt64(buffer, 8);
@@ -407,7 +407,7 @@ namespace XisfLib.Core.Implementations
                 
                 // Read node header (4 + 4 + 8 = 16 bytes)
                 var nodeHeader = new byte[16];
-                await _stream.ReadAsync(nodeHeader, 0, 16, cancellationToken);
+                await _stream.ReadExactlyAsync(nodeHeader, 0, 16, cancellationToken);
                 
                 uint length = BitConverter.ToUInt32(nodeHeader, 0);
                 uint reserved = BitConverter.ToUInt32(nodeHeader, 4);
@@ -418,7 +418,7 @@ namespace XisfLib.Core.Implementations
                 for (uint i = 0; i < length; i++)
                 {
                     var elementData = new byte[40];
-                    await _stream.ReadAsync(elementData, 0, 40, cancellationToken);
+                    await _stream.ReadExactlyAsync(elementData, 0, 40, cancellationToken);
                     
                     var element = new XisfBlockIndexElement(
                         UniqueId: BitConverter.ToUInt64(elementData, 0),
@@ -450,7 +450,7 @@ namespace XisfLib.Core.Implementations
             // Read the block data
             _stream.Position = (long)element.BlockPosition;
             var buffer = new byte[element.BlockLength];
-            await _stream.ReadAsync(buffer, 0, (int)element.BlockLength, cancellationToken);
+            await _stream.ReadExactlyAsync(buffer, 0, (int)element.BlockLength, cancellationToken);
             
             return buffer;
         }

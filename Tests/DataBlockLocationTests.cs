@@ -141,6 +141,16 @@ public sealed class DataBlockLocationTests
     }
 
     [Fact]
+    public async Task Read_TruncatedAttachmentBlock_Throws()
+    {
+        var payload = Pattern(40);
+        var file = TestKit.BuildMonolithic(Document(Gray8Element(payload.Length, BlockBase, payload.Length)), payload);
+        var truncated = file[..^10];
+
+        await Assert.ThrowsAsync<EndOfStreamException>(() => TestKit.ReadBytes(truncated));
+    }
+
+    [Fact]
     public async Task Read_UrlLocation_ExtendsToLastParenthesis()
     {
         const string url = "ftp://ftp.example.com/public/example(2016).dat";

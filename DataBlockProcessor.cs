@@ -441,7 +441,7 @@ namespace XisfLib.Core.Implementations
                     // Read specific portion
                     stream.Position = (long)block.Position.Value;
                     var buffer = new byte[block.Size.Value];
-                    await stream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
+                    await stream.ReadExactlyAsync(buffer, 0, buffer.Length, cancellationToken);
                     return buffer;
                 }
                 else

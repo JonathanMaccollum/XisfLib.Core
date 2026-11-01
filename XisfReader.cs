@@ -107,7 +107,7 @@ namespace XisfLib.Core
 
             // Read file header
             var headerBytes = new byte[16];
-            await stream.ReadAsync(headerBytes.AsMemory(0, 16), cancellationToken);
+            await stream.ReadExactlyAsync(headerBytes.AsMemory(0, 16), cancellationToken);
 
             var signature = new byte[8];
             Array.Copy(headerBytes, 0, signature, 0, 8);
@@ -115,7 +115,7 @@ namespace XisfLib.Core
 
             // Read XML header
             var xmlHeaderBytes = new byte[headerLength];
-            await stream.ReadAsync(xmlHeaderBytes.AsMemory(0, (int)headerLength), cancellationToken);
+            await stream.ReadExactlyAsync(xmlHeaderBytes.AsMemory(0, (int)headerLength), cancellationToken);
 
             var xmlHeaderText = System.Text.Encoding.UTF8.GetString(xmlHeaderBytes);
             var xmlDocument = System.Xml.Linq.XDocument.Parse(xmlHeaderText);
@@ -221,7 +221,7 @@ namespace XisfLib.Core
             try
             {
                 var signatureBytes = new byte[8];
-                await stream.ReadAsync(signatureBytes.AsMemory(0, 8), cancellationToken);
+                await stream.ReadExactlyAsync(signatureBytes.AsMemory(0, 8), cancellationToken);
 
                 var signature = System.Text.Encoding.ASCII.GetString(signatureBytes);
 
